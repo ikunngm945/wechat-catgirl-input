@@ -99,8 +99,10 @@ public final class Probe implements IXposedHookLoadPackage {
         try {
             Cat.loadKaomoji();
             Cat.loadWhitelist();
+            TagLib.load();
             log("配置就绪：词库 " + Cat.kaomojiCount() + " 条，白名单 "
-                    + Cat.whitelist().size() + " 个 " + Cat.whitelist());
+                    + Cat.whitelist().size() + " 个，标签 " + TagLib.tagCount()
+                    + " 个，规则 " + TagLib.ruleCount() + " 条");
         } catch (Throwable t) {
             log("配置加载失败 " + t.getClass().getSimpleName());
         }
@@ -235,6 +237,7 @@ public final class Probe implements IXposedHookLoadPackage {
             }
             Cat.loadKaomoji();
             Cat.loadWhitelist();
+            TagLib.load();
 
             // 取全部文本（游标前后都要，因为语音上屏后光标位置不定）
             CharSequence beforeCs = ic.getTextBeforeCursor(2000, 0);
@@ -342,6 +345,7 @@ public final class Probe implements IXposedHookLoadPackage {
                         Cat.loadKaomoji();
                         Cat.loadWhitelist();
                         Cat.loadSeen();
+                        TagLib.load();
 
                         EditorInfo ei = svc.getCurrentInputEditorInfo();
                         String host = (ei == null || ei.packageName == null)

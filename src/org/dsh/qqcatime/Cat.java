@@ -40,7 +40,7 @@ public final class Cat {
     public static final String SEEN_FILE = DIR + "/seen";
 
     /** 句末标点。 */
-    private static final String PUNCT = "。．！？!?；;…";
+    static final String PUNCT = "。．！？!?；;…";
 
     /** true：喵 加在标点前（你好喵。）。 */
     private static final boolean MIAO_BEFORE_PUNCT = true;
@@ -412,11 +412,19 @@ public final class Cat {
         return whitelist;
     }
 
+    /** 从全部颜文字中随机取一条（兜底用）。 */
+    public static String randomKaomoji() {
+        if (kaomoji == null || kaomoji.length == 0) {
+            return "";
+        }
+        return kaomoji[RND.nextInt(kaomoji.length)];
+    }
+
     public static int kaomojiCount() {
         return kaomoji.length;
     }
 
-    private static void writeFile(String path, String content) {
+    public static void writeFile(String path, String content) {
         try {
             ensureDir();
             Writer w = new OutputStreamWriter(new FileOutputStream(path), "UTF-8");
@@ -528,8 +536,7 @@ public final class Cat {
         }
         String core = addMiao(stripSentenceMiao(stripped)
                 .replace("我", "本喵").replace("你", "主人"));
-        lastAppended = kaomoji[RND.nextInt(kaomoji.length)];
-        return core + lastAppended;
+        return withKaomojiPerSentence(core);
     }
 
     /**
@@ -555,8 +562,48 @@ public final class Cat {
         if (core.equals(stripped) && endsWithKaomoji(input)) {
             return input;
         }
-        lastAppended = kaomoji[RND.nextInt(kaomoji.length)];
-        return core + lastAppended;
+        return withKaomojiPerSentence(core);
+    }
+
+    /**
+     * 按句末标点切分，为每一句挑选并追加颜文字。
+     *
+     * 每句独立匹配标签（命中多个取最后一条规则），
+     * 未命中则从全部颜文字中随机取。
+     */
+    /**
+     * 按句末标点切分，为每一句挑选并追加颜文字。
+     *
+     * 每句独立匹配标签（命中多个取最后一条规则），
+     * 未命中则从全部颜文字中随机取。
+     *
+     * 注意：这里只做「追加」，绝不重复输出原句，避免文本被复制放大。
+     */
+    private static String withKaomojiPerSentence(String core) {
+        TagLib.load();
+        StringBuilder sb = new StringBuilder();
+        StringBuilder cur = new StringBuilder();
+        for (int i = 0; i < core.length(); i++) {
+            char c = core.charAt(i);
+            cur.append(c);
+            if (isPunct(c)) {
+                sb.append(cur);
+                String k = TagLib.pick(cur.toString());
+                if (k.length() > 0) {
+                    sb.append(k);
+                }
+                cur.setLength(0);
+            }
+        }
+        sb.append(cur);
+        String tail = cur.toString().trim();
+        if (tail.length() > 0) {
+            String k = TagLib.pick(tail);
+            if (k.length() > 0) {
+                sb.append(k);
+            }
+        }
+        return sb.toString();
     }
 
     /** 末尾是否是词库里的某个颜文字。 */

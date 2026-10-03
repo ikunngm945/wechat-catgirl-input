@@ -95,9 +95,14 @@ public final class ConfigUI {
         // 词库信息
         Cat.loadKaomoji();
         Cat.loadWhitelist();
+        TagLib.load();
         TextView kao = new TextView(a);
         kao.setText("颜文字词库：" + Cat.kaomojiCount() + " 条\n"
-                + "词库文件：" + Cat.KAO_FILE);
+                + "标签分类：" + TagLib.tagCount() + " 个\n"
+                + "关键词规则：" + TagLib.ruleCount() + " 条\n"
+                + "词库文件：" + Cat.KAO_FILE + "\n"
+                + "标签目录：" + TagLib.TAGS_DIR + "\n"
+                + "规则文件：" + TagLib.RULES_FILE);
         kao.setTextSize(12);
         kao.setTextColor(Color.parseColor("#666666"));
         root.addView(kao);
