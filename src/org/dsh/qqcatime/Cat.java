@@ -501,25 +501,6 @@ public final class Cat {
         return sb.toString();
     }
 
-    /** 每个句末标点前补「喵」（会吃掉标点前的空白）。 */
-    private static String addMiao(String s) {
-        StringBuilder sb = new StringBuilder(s.length() + 16);
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (!isPunct(c)) {
-                sb.append(c);
-                continue;
-            }
-            while (sb.length() > 0 && isBlank(sb.charAt(sb.length() - 1))) {
-                sb.deleteCharAt(sb.length() - 1);
-            }
-            if (sb.length() == 0 || sb.charAt(sb.length() - 1) != '喵') {
-                sb.append('喵');
-            }
-            sb.append(c);
-        }
-        return sb.toString();
-    }
 
     /**
      * 核心转换。
@@ -534,8 +515,9 @@ public final class Cat {
         if (!needsMiao(stripped)) {
             return input;
         }
-        String core = addMiao(stripSentenceMiao(stripped)
-                .replace("我", "本喵").replace("你", "主人"));
+        // 加喵统一交给 withKaomojiPerSentence 逐句处理，这里不再重复加
+        String core = stripSentenceMiao(stripped)
+                .replace("我", "本喵").replace("你", "主人");
         return withKaomojiPerSentence(core);
     }
 
@@ -553,15 +535,14 @@ public final class Cat {
             return input;
         }
         String stripped = stripKaomoji(input);
-        String replaced = stripSentenceMiao(stripped)
+        String core = stripSentenceMiao(stripped)
                 .replace("我", "本喵").replace("你", "主人");
-        // 有句末标点 -> 照常加喵
-        String core = needsMiao(stripped) ? addMiao(replaced) : replaced;
 
         // 确实没有任何改动，且末尾已是颜文字 -> 保持原样
         if (core.equals(stripped) && endsWithKaomoji(input)) {
             return input;
         }
+        // 加喵与选颜文字都放到「逐句」里做，保证没标点的句子也能补上喵
         return withKaomojiPerSentence(core);
     }
 
@@ -579,6 +560,39 @@ public final class Cat {
      *
      * 注意：这里只做「追加」，绝不重复输出原句，避免文本被复制放大。
      */
+    /**
+     * 在一句末尾补「喵」。
+     *
+     * 有句末标点时插在标点前（你好喵。）；没有标点时直接加在末尾（你好喵）。
+     * 已经以「喵」结尾则原样返回，保证可重复调用。
+     */
+    private static String endWithMiao(String sentence) {
+        if (sentence == null || sentence.length() == 0) {
+            return sentence;
+        }
+        // 跳过末尾连续的标点
+        int i = sentence.length() - 1;
+        int punctStart = sentence.length();
+        while (i >= 0 && isPunct(sentence.charAt(i))) {
+            punctStart = i;
+            i--;
+        }
+        // 跳过标点前的空白
+        int j = punctStart - 1;
+        while (j >= 0 && isBlank(sentence.charAt(j))) {
+            j--;
+        }
+        if (j >= 0 && sentence.charAt(j) == '喵') {
+            return sentence;   // 已有喵，不重复加
+        }
+        // 去掉标点前的空白，把喵贴紧正文
+        StringBuilder head = new StringBuilder(sentence.substring(0, punctStart));
+        while (head.length() > 0 && isBlank(head.charAt(head.length() - 1))) {
+            head.setLength(head.length() - 1);
+        }
+        return head + "喵" + sentence.substring(punctStart);
+    }
+
     private static String withKaomojiPerSentence(String core) {
         TagLib.load();
         StringBuilder sb = new StringBuilder();
@@ -587,20 +601,26 @@ public final class Cat {
             char c = core.charAt(i);
             cur.append(c);
             if (isPunct(c)) {
-                sb.append(cur);
-                String k = TagLib.pick(cur.toString());
+                String one = cur.toString();
+                sb.append(endWithMiao(one));
+                String k = TagLib.pick(one);
                 if (k.length() > 0) {
                     sb.append(k);
                 }
                 cur.setLength(0);
             }
         }
-        sb.append(cur);
-        String tail = cur.toString().trim();
-        if (tail.length() > 0) {
-            String k = TagLib.pick(tail);
-            if (k.length() > 0) {
-                sb.append(k);
+        // 末尾残句（没有标点收尾）也要补喵 + 颜文字
+        if (cur.length() > 0) {
+            String tail = cur.toString();
+            if (tail.trim().length() > 0) {
+                sb.append(endWithMiao(tail));
+                String k = TagLib.pick(tail);
+                if (k.length() > 0) {
+                    sb.append(k);
+                }
+            } else {
+                sb.append(tail);
             }
         }
         return sb.toString();
