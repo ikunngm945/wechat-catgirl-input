@@ -1,0 +1,9 @@
+# 构建产物
+build/
+dist/
+# 签名密钥（切勿上传）
+.signing/
+*.p12
+*.jks
+# 其他
+*.log

@@ -1,0 +1,196 @@
+# 微信输入法猫娘模块
+
+在**微信 / QQ** 聊天框里输入到句末标点，自动「喵化」并追加随机颜文字。
+
+   我 → 本喵      你 → 主人      句末加「喵」      末尾随机颜文字（54 条）
+
+## 为什么需要这条路线
+
+微信 `com.tencent.mm` **主动屏蔽了无障碍节点树**（实测根节点 `children=0`，
+无 FLAG_SECURE，`isAccessibilityTool=true` 仍为空），任何基于无障碍的方案
+（含路线 A）都读不到微信输入框。
+
+**但微信对输入法完全透明** —— 输入法本来就看得见用户打的字。
+本模块钩在微信输入法进程内，用 `InputConnection` 读写输入框，
+因此微信也能用。
+
+## 实测证据
+
+```
+CALL onStartInput host=com.tencent.mm
+WRITE host=com.tencent.mm ok=true from=[我爱你。] to=[本喵爱主人喵。=^𖥦^=]
+```
+
+微信输入框实际显示：`本喵爱主人喵。=^𖥦^=` ✅
+
+## 安装步骤
+
+### 1. 安装模块
+
+```sh
+pm install -r QQCatIME-1.3.apk
+```
+
+### 2. 在 LSPosed 里启用（必须手动，无法脚本化）
+
+LSPosed 管理器 → **模块** → 「微信输入法猫娘模块」→ 打开开关
+→ 作用域**只勾选「微信输入法」**（`com.tencent.wetype`）
+
+> 若列表里看不到本模块，说明 APK 缺少 `assets/xposed_init`。
+> 本仓库 build.py 已内置该文件的校验。
+
+### 3. 重启微信输入法
+
+```sh
+kill -9 $(pidof com.tencent.wetype)   # 或系统设置里「强行停止」
+```
+然后点任意输入框让它重新启动。
+
+### 4. 配置白名单
+
+首次运行会自动释放到 `/data/user/0/com.tencent.wetype/qqime/whitelist`：
+
+```
+com.tencent.mobileqq
+com.tencent.mobileqqi
+com.tencent.tim
+```
+
+要支持微信就加一行（立即生效，无需重启）：
+```sh
+/data/adb/QQIME.sh wl add com.tencent.mm
+```
+
+## 配置管理
+
+`/data/adb/QQIME.sh`：
+
+| 命令 | 作用 |
+|---|---|
+| `QQIME.sh wl` | 查看白名单 |
+| `QQIME.sh wl add com.tencent.mm` | 添加微信 |
+| `QQIME.sh wl del com.tencent.mm` | 删除 |
+| `QQIME.sh wl set a b c` | 整体覆盖 |
+| `QQIME.sh katxt` | 查看词库条数 |
+| `QQIME.sh log` | 查看运行日志 |
+| `QQIME.sh reload` | 修正文件属主 |
+
+词库文件：`/data/user/0/com.tencent.wetype/qqime/katxt`
+（一行一个颜文字，改完立即生效，无需重启）
+
+## 两个配置文件的规则
+
+- **仅在没有时释放**：已存在的文件一律保留，绝不覆盖你的改动
+- **改动即生效**：模块按 `mtime+size` 检测，热重载，不用重启
+- 文件为空时回退内置默认值
+
+
+## 图形配置界面（v2.3+）
+
+配置面板**直接内嵌在微信输入法「关于」页**里（设置 → 关于）：
+
+- **颜文字词库**：显示条数与文件路径
+- **白名单**：当前生效的包名（绿色列表）
+- **可添加的应用**：列出输入法可见的应用（带图标、名称、包名），
+  勾选即加入白名单，取消即移除，**立即生效、无需 root、无需重启**
+- **自动发现的应用**：输入法在实际使用中遇到过、但枚举不到的应用，
+  会自动记入 `seen` 并显示在这里，同样可勾选加入白名单
+- **清空发现记录**：一键清掉 `seen`
+
+### 应用列表的两级来源
+
+| 来源 | 数量（实测） | 说明 |
+|---|---|---|
+| `queryIntentActivities(ACTION_MAIN+LAUNCHER)` | 31 | 有桌面图标的应用 |
+| `queryIntentActivities(ACTION_MAIN)` | **73** | 去掉 category 限制，翻倍 |
+| **自动发现（`seen`）** | 动态 | 输入法实际遇到过的，兜底 |
+
+前两级都靠枚举，覆盖不到没有 `MAIN` 入口的应用；
+`seen` 是**运行期实测**，输入法碰到哪个 App 的输入框就记下哪个，
+因此能兜住枚举遗漏的情况。发现项会与枚举列表去重，不重复显示。
+
+### 为什么输入法能看到应用列表
+
+微信输入法只声明了 4 个 `queriesPackages`，`getInstalledApplications()`
+在进程内只能看到 1 个包。但 `queryIntentActivities(LAUNCHER)` 能拿到
+**31 个有桌面图标的应用**（实测含微信、QQ），足以覆盖日常聊天场景。
+
+> 若需要更完整的列表，可改用独立 App + `QUERY_ALL_PACKAGES` 声明。
+
+### 实现要点
+
+1. **注入点**：关于页是 `ImeAboutActivity`，跑在**主进程** `com.tencent.wetype`
+   （模块已加载在此），因此 UI 可直接写白名单文件，**不需要 root**。
+2. **钩法**：钩 `Activity.onCreate` 通用入口，按类名后缀
+   `endsWith("ImeAboutActivity")` 匹配。直接 `findAndHookMethod(类名字符串)`
+   会失败（`ClassNotFoundError`），因为该类由插件类加载器加载。
+3. **时机**：`onCreate` 阶段 `android.R.id.content` 还没有子视图，
+   必须用 `decorView.post()` 延迟到消息队列末尾再 `addView`，
+   否则日志报"已注入"但界面看不到。
+4. **布局**：面板包在限高的 `ScrollView` 里（55% 屏高），避免撑破输入法布局。
+
+### 兼容性
+
+关于页布局由腾讯控制，**输入法更新后布局 id 变化可能导致面板失效**。
+届时需重新适配注入点；功能本身（读写在输入法进程内）不受影响。
+
+
+## 语音输入自动发送（v3.1+）
+
+微信输入法 3.5.4 起，在微信/QQ 里语音转文字后会**自动发送**。
+本模块会在发送动作发生前抢先改写文本，保证发出去的就是喵化版。
+
+**实测时序**（定稿到发送只有 5 毫秒）：
+```
+setComposingText(全文) → finishComposingText → performEditorAction(4)
+```
+
+因此拦截点设在 `finishComposingText` 与 `performEditorAction`。
+
+**重要**：语音识别结果常常**不带句末标点**，所以发送前用的是
+`transformLoose()`（人称替换 + 颜文字无条件执行），而非打字用的
+`transform()`（需检测到标点才动）。详见 [VOICE.md](VOICE.md)。
+
+注意：语音识别期间轮询会主动让路（1.5 秒静默期），
+否则会与输入法的流式上屏互相覆盖、造成文本重复。
+
+## 构建
+
+```sh
+python3.12 /root/dsh/qqcat-ime/build.py
+```
+
+产物：`dist/QQCatIME-<version>.apk`
+
+### 构建要点（踩过的坑）
+
+1. **必须有 `assets/xposed_init`**，内容为入口类全名
+   （`org.dsh.qqcatime.Probe`）。缺它 LSPosed 管理器列表里
+   根本看不到模块 —— 这是最初失败的原因。
+2. Manifest 需 4 个 meta-data：
+   `xposedmodule` / `xposeddescription` / `xposedminversion` / `xposedscope`
+3. 配置目录必须在**输入法自己的数据目录**内：输入法跑在
+   `untrusted_app` 域，无法写 `/data/adb` 或 `/data/local/tmp`。
+4. 改代码后必须重启输入法进程才重新加载。
+
+## 与路线 A 的关系
+
+两条路线并存，互不冲突：
+
+| | 路线 A（无障碍） | 路线 B（本模块） |
+|---|---|---|
+| 位置 | `/data/adb/QQ/qqcat.sh` | LSPosed 模块 |
+| QQ | ✅ | ✅ |
+| 微信 | ❌ 被屏蔽 | ✅ |
+| 依赖 | 无 | LSPosed 框架 |
+| 无障碍注册 | 独占（会临时解绑你的截屏/辅助服务） | 不注册，无影响 |
+
+**微信只能用路线 B；QQ 两条都能用。**
+
+## 已知边界
+
+- 只在**微信输入法**（`com.tencent.wetype`）进程内工作。
+  换用搜狗/百度输入法则不生效（可另建同构模块，只需改 scope）。
+- 写入后会清 composing 状态，避免触发候选联想。
+- 切换 App 时会重置基线，不会误改「输入框里本来就有的旧文本」。
+- 不读剪贴板、不发送消息、不联网。
