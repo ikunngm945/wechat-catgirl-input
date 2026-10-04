@@ -94,6 +94,143 @@ public final class ConfigUI {
         title.setPadding(0, 0, 0, (int) (8 * d));
         root.addView(title);
 
+        // ---- 转换设置（开关 / 后缀 / 替换规则）----
+        TextView setTitle = new TextView(a);
+        setTitle.setText("\n转换设置");
+        setTitle.setTextSize(14);
+        setTitle.setTextColor(Color.parseColor("#111111"));
+        root.addView(setTitle);
+
+        final LinearLayout setBox = new LinearLayout(a);
+        setBox.setOrientation(LinearLayout.VERTICAL);
+        root.addView(setBox);
+
+        final Runnable refreshSettings = new Runnable() {
+            @Override
+            public void run() {
+                setBox.removeAllViews();
+                Config.load();
+
+                // 三个总开关 + 所有应用
+                setBox.addView(buildSwitchRow(a, "文字替换（我→本喵 等）",
+                        Config.replaceEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Config.saveSettings(v, Config.suffix(),
+                                        Config.suffixEnabled(),
+                                        Config.kaomojiEnabled(),
+                                        Config.allAppsEnabled());
+                            }
+                        }));
+
+                // 后缀：文本框 + 开关
+                LinearLayout sufRow = new LinearLayout(a);
+                sufRow.setOrientation(LinearLayout.HORIZONTAL);
+                sufRow.setGravity(Gravity.CENTER_VERTICAL);
+                sufRow.setPadding(0, (int) (6 * d), 0, (int) (6 * d));
+                TextView sufLab = new TextView(a);
+                sufLab.setText("句末后缀：");
+                sufLab.setTextSize(13);
+                sufRow.addView(sufLab);
+                final EditText sufInput = new EditText(a);
+                sufInput.setTextSize(13);
+                sufInput.setText(Config.suffix());
+                sufInput.setLayoutParams(new LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                sufRow.addView(sufInput);
+                Button sufSave = new Button(a);
+                sufSave.setText("保存后缀");
+                sufSave.setTextSize(11);
+                sufSave.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        Config.saveSettings(Config.replaceEnabled(),
+                                sufInput.getText().toString(),
+                                Config.suffixEnabled(),
+                                Config.kaomojiEnabled(),
+                                Config.allAppsEnabled());
+                        toast(a, "后缀已保存：" + Config.suffix());
+                    }
+                });
+                sufRow.addView(sufSave);
+                setBox.addView(sufRow);
+
+                setBox.addView(buildSwitchRow(a, "启用句末后缀",
+                        Config.suffixEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Config.saveSettings(Config.replaceEnabled(),
+                                        Config.suffix(), v,
+                                        Config.kaomojiEnabled(),
+                                        Config.allAppsEnabled());
+                            }
+                        }));
+
+                setBox.addView(buildSwitchRow(a, "启用颜文字",
+                        Config.kaomojiEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Config.saveSettings(Config.replaceEnabled(),
+                                        Config.suffix(), Config.suffixEnabled(),
+                                        v, Config.allAppsEnabled());
+                            }
+                        }));
+
+                setBox.addView(buildSwitchRow(a, "对所有应用生效（关闭则按白名单）",
+                        Config.allAppsEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Config.saveSettings(Config.replaceEnabled(),
+                                        Config.suffix(), Config.suffixEnabled(),
+                                        Config.kaomojiEnabled(), v);
+                            }
+                        }));
+
+                // 替换规则编辑
+                TextView rLab = new TextView(a);
+                rLab.setTextSize(13);
+                rLab.setTextColor(Color.parseColor("#111111"));
+                rLab.setText("\n文字替换规则（每行一条：原词=替换词）\n"
+                        + "行首加 ! 可单独关闭该条，例如 !你=主人");
+                setBox.addView(rLab);
+
+                final EditText rInput = new EditText(a);
+                rInput.setTextSize(12);
+                rInput.setGravity(Gravity.TOP | Gravity.START);
+                StringBuilder rb = new StringBuilder();
+                for (Config.Rule r : Config.rules()) {
+                    rb.append(r.line()).append('\n');
+                }
+                rInput.setText(rb.toString());
+                rInput.setLayoutParams(new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, (int) (110 * d)));
+                setBox.addView(rInput);
+
+                Button rSave = new Button(a);
+                rSave.setText("保存替换规则");
+                rSave.setTextSize(11);
+                rSave.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        Config.saveRules(rInput.getText().toString());
+                        toast(a, "已保存 " + Config.enabledRuleCount() + " 条启用规则");
+                    }
+                });
+                setBox.addView(rSave);
+
+                TextView rHint = new TextView(a);
+                rHint.setTextSize(10);
+                rHint.setTextColor(Color.parseColor("#888888"));
+                rHint.setText("当前设置：替换 " + (Config.replaceEnabled() ? "开" : "关")
+                        + " / 后缀 " + (Config.suffixEnabled()
+                                ? "[" + Config.suffix() + "]" : "关")
+                        + " / 颜文字 " + (Config.kaomojiEnabled() ? "开" : "关")
+                        + " / 全部应用 " + (Config.allAppsEnabled() ? "开" : "关"));
+                setBox.addView(rHint);
+            }
+        };
+        refreshSettings.run();
+
         // ---- 使用说明 ----
         TextView helpTitle = new TextView(a);
         helpTitle.setText("\n使用说明");
@@ -656,6 +793,39 @@ public final class ConfigUI {
             Cat.log("标签编辑失败 " + t.getClass().getSimpleName());
             toast(a, "打开编辑器失败：" + t.getClass().getSimpleName());
         }
+    }
+
+    /** 开关变更回调。 */
+    private interface SwitchHandler {
+        void onSet(boolean v);
+    }
+
+    /** 构造一行「标题 + 开关」。 */
+    private static View buildSwitchRow(Activity a, String label,
+                                       boolean checked,
+                                       final SwitchHandler h) {
+        float d = a.getResources().getDisplayMetrics().density;
+        LinearLayout row = new LinearLayout(a);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, (int) (6 * d), 0, (int) (6 * d));
+        TextView tv = new TextView(a);
+        tv.setText(label);
+        tv.setTextSize(13);
+        tv.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(tv);
+        android.widget.Switch sw = new android.widget.Switch(a);
+        sw.setChecked(checked);
+        sw.setOnCheckedChangeListener(
+                new android.widget.CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(android.widget.CompoundButton b, boolean v) {
+                        h.onSet(v);
+                    }
+                });
+        row.addView(sw);
+        return row;
     }
 
     /** 日志状态描述。 */

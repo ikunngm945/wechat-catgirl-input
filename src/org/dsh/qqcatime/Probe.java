@@ -99,6 +99,7 @@ public final class Probe implements IXposedHookLoadPackage {
         try {
             Cat.loadKaomoji();
             Cat.loadWhitelist();
+            Config.load();
             TagLib.load();
             log("配置就绪：词库 " + Cat.kaomojiCount() + " 条，白名单 "
                     + Cat.whitelist().size() + " 个，标签 " + TagLib.tagCount()
@@ -232,11 +233,12 @@ public final class Probe implements IXposedHookLoadPackage {
             // 白名单校验
             EditorInfo ei = svc.getCurrentInputEditorInfo();
             String host = (ei == null || ei.packageName == null) ? null : ei.packageName.toString();
-            if (host == null || !Cat.allowed(host)) {
+            if (host == null || !Config.shouldWorkOn(host)) {
                 return;
             }
             Cat.loadKaomoji();
             Cat.loadWhitelist();
+            Config.load();
             TagLib.load();
 
             // 取全部文本（游标前后都要，因为语音上屏后光标位置不定）
@@ -345,12 +347,13 @@ public final class Probe implements IXposedHookLoadPackage {
                         Cat.loadKaomoji();
                         Cat.loadWhitelist();
                         Cat.loadSeen();
+                        Config.load();
                         TagLib.load();
 
                         EditorInfo ei = svc.getCurrentInputEditorInfo();
                         String host = (ei == null || ei.packageName == null)
                                 ? null : ei.packageName.toString();
-                        boolean allowed = host != null && Cat.allowed(host);
+                        boolean allowed = host != null && Config.shouldWorkOn(host);
 
                         // 输入法正在拼写/语音识别中 —— 让路，绝不干预，
                         // 否则会被随后的 setComposingText 覆盖，导致文本重复。
