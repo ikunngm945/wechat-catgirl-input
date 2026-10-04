@@ -21,7 +21,7 @@ SDK = Path('/root/dsh/apk-analysis/tools/android-33/android.jar')
 R8 = Path('/www/wwwroot/192.168.1.116_10086/android-music/tools/r8.jar')
 API = ROOT / 'deps/xposed-api-82.jar'
 ENTRY = 'org.dsh.qqcatime.Probe'
-VERSION = '5.7'
+VERSION = '5.9'
 
 
 def run(*args):
@@ -29,7 +29,17 @@ def run(*args):
     subprocess.run(list(map(str, args)), check=True)
 
 
+def gen_defaults():
+    """从 config/ 生成 Defaults.java（词库/规则/标签的内置默认值）。"""
+    gen = ROOT / 'tools/gen_config.py'
+    if not gen.exists():
+        sys.exit(f'缺少 {gen}')
+    run('python3.12', gen)
+
+
 def main():
+    gen_defaults()
+
     if not SDK.exists():
         sys.exit(f'缺少 android.jar: {SDK}')
     if not API.exists():
@@ -53,7 +63,8 @@ def main():
     src = ROOT / 'src/org/dsh/qqcatime'
     run('javac', '-encoding', 'UTF-8', '--release', '8',
         '-cp', f'{SDK}:{API}', '-d', classes,
-        src / 'Version.java', src / 'Cat.java', src / 'TagLib.java',
+        src / 'Version.java', src / 'Defaults.java', src / 'Cat.java',
+        src / 'TagLib.java',
         src / 'ConfigUI.java', src / 'Probe.java')
 
     jar = build / 'module.jar'

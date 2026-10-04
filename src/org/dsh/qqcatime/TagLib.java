@@ -41,35 +41,12 @@ public final class TagLib {
     public static final String RULES_FILE = Cat.DIR + "/rules.txt";
 
     /** 默认规则（首次运行释放，用户可自行修改）。 */
-    public static final String[] DEFAULT_RULES = {
-        "你好=开心",
-        "哈哈=开心",
-        "开心=开心",
-        "高兴=开心",
-        "喜欢=开心",
-        "谢谢=开心",
-        "难过=难过",
-        "伤心=难过",
-        "哭=难过",
-        "难受=难过",
-        "饿=饿",
-        "吃=饿",
-        "饭=饿",
-        "累=累",
-        "困=累",
-        "睡=累",
-        "生气=生气",
-        "怒=生气",
-        "讨厌=生气",
-        "爱=爱心",
-        "喜欢你=爱心",
-        "想你=爱心",
-    };
+    /** 内置默认规则（来自 config/rules.txt）。 */
+    public static final String[] DEFAULT_RULES = Cat.splitLines(Defaults.RULES);
 
     /** 示例标签文件（首次运行释放，内容取自内置词库的前若干条）。 */
-    public static final String[] DEFAULT_TAGS = {
-        "开心", "难过", "饿", "累", "生气", "爱心",
-    };
+    /** 内置默认标签名（来自 config/tags/）。 */
+    public static final String[] DEFAULT_TAGS = Defaults.TAG_NAMES;
 
     private static final Random RND = new Random();
 
@@ -183,7 +160,7 @@ public final class TagLib {
         Cat.log("tags: 已加载 " + tagKaomoji.size() + " 个标签 " + tagKaomoji.keySet());
     }
 
-    /** 首次运行：释放示例标签文件，内容取内置词库的前若干条。 */
+    /** 首次运行：按内置标签内容释放 tags/ 目录。 */
     private static void releaseDefaultTags() {
         try {
             File dir = new File(TAGS_DIR);
@@ -195,15 +172,12 @@ public final class TagLib {
         } catch (Throwable t) {
             // 忽略
         }
-        int idx = 0;
-        for (String tag : DEFAULT_TAGS) {
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < 6 && idx < Cat.DEFAULT_KAO.length; i++, idx++) {
-                sb.append(Cat.DEFAULT_KAO[idx]).append('\n');
-            }
-            Cat.writeFile(TAGS_DIR + "/" + tag + ".txt", sb.toString());
+        for (int i = 0; i < Defaults.TAG_NAMES.length
+                && i < Defaults.TAG_BODIES.length; i++) {
+            Cat.writeFile(TAGS_DIR + "/" + Defaults.TAG_NAMES[i] + ".txt",
+                    Defaults.TAG_BODIES[i]);
         }
-        Cat.log("tags: 已释放 " + DEFAULT_TAGS.length + " 个示例标签文件");
+        Cat.log("tags: 已释放内置 " + Defaults.TAG_NAMES.length + " 个标签");
     }
 
     private static List<String> readLines(File f) {
@@ -288,5 +262,179 @@ public final class TagLib {
     /** 规则条数。 */
     public static int ruleCount() {
         return rules.size();
+    }
+
+    /** 强制下次 load() 重新读盘（恢复默认后调用）。 */
+    public static void forceReload() {
+        rulesStamp = -2;
+        tagsStamp = -2;
+        load();
+    }
+
+    // ------------------------------------------------------------ 编辑 API
+
+    /** 当前所有标签名（已排序）。 */
+    public static java.util.List<String> tagNames() {
+        java.util.List<String> out = new ArrayList<String>(tagKaomoji.keySet());
+        java.util.Collections.sort(out);
+        return out;
+    }
+
+    /** 读取某标签的颜文字行。 */
+    public static java.util.List<String> readTagKaomoji(String tag) {
+        return readLines(new File(TAGS_DIR + "/" + tag + ".txt"));
+    }
+
+    /** 读取某标签对应的关键词（rules.txt 里 tag 等于该标签的）。 */
+    public static java.util.List<String> readTagKeywords(String tag) {
+        java.util.List<String> out = new ArrayList<String>();
+        for (Map.Entry<String, String> e : rules.entrySet()) {
+            if (e.getValue().equals(tag)) {
+                out.add(e.getKey());
+            }
+        }
+        return out;
+    }
+
+    /** 保存某标签的颜文字（整文件覆盖）。 */
+    public static synchronized boolean saveTagKaomoji(String tag, String content) {
+        if (tag == null || tag.trim().length() == 0) {
+            return false;
+        }
+        tag = tag.trim();
+        try {
+            File dir = new File(TAGS_DIR);
+            if (!dir.isDirectory()) {
+                dir.mkdirs();
+            }
+            Cat.writeFile(TAGS_DIR + "/" + tag + ".txt", content);
+            tagsStamp = -2;   // 强制重载
+            load();
+            rebuildMasterLibrary();
+            Cat.log("保存标签颜文字 " + tag + "，共 " + readTagKaomoji(tag).size() + " 条");
+            return true;
+        } catch (Throwable t) {
+            Cat.log("保存标签失败 " + t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
+     * 保存某标签的关键词：把 rules.txt 里属于该标签的旧规则替换成新的一组，
+     * 其它标签的规则保持原样。
+     */
+    public static synchronized boolean saveTagKeywords(String tag, String content) {
+        if (tag == null || tag.trim().length() == 0) {
+            return false;
+        }
+        tag = tag.trim();
+        try {
+            LinkedHashMap<String, String> next = new LinkedHashMap<String, String>();
+            // 保留其它标签的规则
+            for (Map.Entry<String, String> e : rules.entrySet()) {
+                if (!e.getValue().equals(tag)) {
+                    next.put(e.getKey(), e.getValue());
+                }
+            }
+            // 追加本标签的新关键词（按行）
+            for (String line : content.split("\n")) {
+                String k = line.trim();
+                if (k.length() > 0 && !k.startsWith("#")) {
+                    // 关键词若含 = ，只取前半段，避免格式错乱
+                    int eq = k.indexOf('=');
+                    if (eq > 0) {
+                        k = k.substring(0, eq).trim();
+                    }
+                    if (k.length() > 0) {
+                        next.put(k, tag);
+                    }
+                }
+            }
+            StringBuilder sb = new StringBuilder();
+            for (Map.Entry<String, String> e : next.entrySet()) {
+                sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
+            }
+            Cat.writeFile(RULES_FILE, sb.toString());
+            rulesStamp = -2;
+            load();
+            Cat.log("保存标签规则 " + tag + "，共 " + readTagKeywords(tag).size() + " 条关键词");
+            return true;
+        } catch (Throwable t) {
+            Cat.log("保存规则失败 " + t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /** 新建标签。 */
+    public static synchronized boolean createTag(String tag) {
+        if (tag == null) {
+            return false;
+        }
+        tag = tag.trim();
+        if (tag.length() == 0 || tagKaomoji.containsKey(tag)) {
+            return false;
+        }
+        return saveTagKaomoji(tag, "");
+    }
+
+    /** 删除标签（连同它的颜文字文件与关键词规则）。 */
+    public static synchronized boolean deleteTag(String tag) {
+        if (tag == null) {
+            return false;
+        }
+        tag = tag.trim();
+        try {
+            File f = new File(TAGS_DIR + "/" + tag + ".txt");
+            if (f.isFile()) {
+                f.delete();
+            }
+            LinkedHashMap<String, String> next = new LinkedHashMap<String, String>();
+            for (Map.Entry<String, String> e : rules.entrySet()) {
+                if (!e.getValue().equals(tag)) {
+                    next.put(e.getKey(), e.getValue());
+                }
+            }
+            StringBuilder sb = new StringBuilder();
+            for (Map.Entry<String, String> e : next.entrySet()) {
+                sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
+            }
+            Cat.writeFile(RULES_FILE, sb.toString());
+            rulesStamp = -2;
+            tagsStamp = -2;
+            load();
+            rebuildMasterLibrary();
+            Cat.log("删除标签 " + tag);
+            return true;
+        } catch (Throwable t) {
+            Cat.log("删除标签失败 " + t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
+     * 按所有标签的颜文字重建总库 katxt（自动去重）。
+     * 这样「总的颜文字库会随着其他的变化而变化，但不会汇入重复的」。
+     */
+    public static synchronized int rebuildMasterLibrary() {
+        LinkedHashMap<String, Boolean> uniq = new LinkedHashMap<String, Boolean>();
+        for (String[] arr : tagKaomoji.values()) {
+            for (String k : arr) {
+                String t = k == null ? "" : k.trim();
+                if (t.length() > 0) {
+                    uniq.put(t, Boolean.TRUE);
+                }
+            }
+        }
+        if (uniq.isEmpty()) {
+            return 0;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String k : uniq.keySet()) {
+            sb.append(k).append('\n');
+        }
+        Cat.writeFile(Cat.KAO_FILE, sb.toString());
+        Cat.reloadKaomoji();
+        Cat.log("重建总库 katxt：" + uniq.size() + " 条（去重后）");
+        return uniq.size();
     }
 }

@@ -12,6 +12,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -93,6 +94,34 @@ public final class ConfigUI {
         title.setPadding(0, 0, 0, (int) (8 * d));
         root.addView(title);
 
+        // ---- 使用说明 ----
+        TextView helpTitle = new TextView(a);
+        helpTitle.setText("\n使用说明");
+        helpTitle.setTextSize(14);
+        helpTitle.setTextColor(Color.parseColor("#111111"));
+        root.addView(helpTitle);
+
+        TextView help = new TextView(a);
+        help.setTextSize(12);
+        help.setTextColor(Color.parseColor("#444444"));
+        help.setText(
+            "本模块让微信 / QQ 聊天时自动喵化：\n"
+          + "  我 → 本喵，你 → 主人，句末加「喵」，末尾随机颜文字。\n"
+          + "\n"
+          + "【三种触发方式，满足任一即可】\n"
+          + "  1. 语音转文字：说完自动发送前改写，直接触发。\n"
+          + "  2. 打标点：输入到 。！？ 等标点后停顿约 2 秒，自动改写。\n"
+          + "  3. 输入法发送键：点微信输入法的「发送」触发。\n"
+          + "     微信 / QQ 需先开启：设置 → 辅助输入 → 回车键发送。\n"
+          + "\n"
+          + "【使用前检查】\n"
+          + "  · 先在下面「白名单」里勾选要生效的应用（如微信）。\n"
+          + "  · 改完词库或规则立即生效，无需重启输入法。\n"
+          + "  · 不生效时，点最下方「复制全部日志」发给开发者排查。"
+        );
+        help.setTextIsSelectable(true);
+        root.addView(help);
+
         // 词库信息
         Cat.loadKaomoji();
         Cat.loadWhitelist();
@@ -136,6 +165,137 @@ public final class ConfigUI {
             list.addView(buildRow(a, e, wlView));
         }
         root.addView(list);
+
+        // ---- 标签与词库编辑 ----
+        TextView tagTitle = new TextView(a);
+        tagTitle.setText("\n标签与词库（点标签名编辑颜文字和关键词）");
+        tagTitle.setTextSize(14);
+        tagTitle.setTextColor(Color.parseColor("#111111"));
+        root.addView(tagTitle);
+
+        final LinearLayout tagList = new LinearLayout(a);
+        tagList.setOrientation(LinearLayout.VERTICAL);
+        root.addView(tagList);
+
+        final LinearLayout masterInfo = new LinearLayout(a);
+        masterInfo.setOrientation(LinearLayout.VERTICAL);
+        root.addView(masterInfo);
+
+        // 刷新标签列表（编辑后调用）
+        final Runnable refreshTags = new Runnable() {
+            @Override
+            public void run() {
+                tagList.removeAllViews();
+                masterInfo.removeAllViews();
+                for (final String tg : TagLib.tagNames()) {
+                    tagList.addView(buildTagRow(a, tg, wlView, null));
+                }
+                TextView mi = new TextView(a);
+                mi.setTextSize(11);
+                mi.setTextColor(Color.parseColor("#666666"));
+                mi.setText("总库 katxt：" + Cat.kaomojiCount()
+                        + " 条（由所有标签自动汇总去重）");
+                masterInfo.addView(mi);
+            }
+        };
+        // 用可复用的 holder 让行内能触发刷新
+        for (final String tg : TagLib.tagNames()) {
+            tagList.addView(buildTagRow(a, tg, wlView, refreshTags));
+        }
+
+        // 新建标签
+        LinearLayout newTagRow = new LinearLayout(a);
+        newTagRow.setOrientation(LinearLayout.HORIZONTAL);
+        newTagRow.setPadding(0, (int) (8 * d), 0, 0);
+        final EditText newTagInput = new EditText(a);
+        newTagInput.setHint("新标签名，如 得意");
+        newTagInput.setTextSize(12);
+        newTagInput.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        newTagRow.addView(newTagInput);
+        Button newTagBtn = new Button(a);
+        newTagBtn.setText("新建");
+        newTagBtn.setTextSize(12);
+        newTagBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String name = newTagInput.getText().toString().trim();
+                if (name.length() == 0) {
+                    toast(a, "请先输入标签名");
+                    return;
+                }
+                if (TagLib.createTag(name)) {
+                    newTagInput.setText("");
+                    refreshTags.run();
+                    toast(a, "已新建标签：" + name);
+                } else {
+                    toast(a, "标签已存在或名称无效");
+                }
+            }
+        });
+        newTagRow.addView(newTagBtn);
+        root.addView(newTagRow);
+
+        // ---- 恢复默认设置 ----
+        Button restoreBtn = new Button(a);
+        restoreBtn.setText("恢复默认设置");
+        restoreBtn.setTextSize(12);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        rlp.topMargin = (int) (10 * d);
+        restoreBtn.setLayoutParams(rlp);
+        restoreBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                new android.app.AlertDialog.Builder(a)
+                        .setTitle("恢复默认设置")
+                        .setMessage("将把内置的词库、标签分类、关键词规则全部还原，"
+                                + "你自行添加或修改的内容会被覆盖。\n\n"
+                                + "白名单不受影响（仍保留你的勾选）。\n\n确定继续吗？")
+                        .setPositiveButton("恢复", new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface dlg, int w) {
+                                if (Cat.restoreDefaults()) {
+                                    toast(a, "已恢复默认：词库 " + Cat.kaomojiCount()
+                                            + " 条，标签 " + TagLib.tagCount()
+                                            + " 个，规则 " + TagLib.ruleCount() + " 条");
+                                    // 标签列表需要按新配置重建
+                                    tagList.removeAllViews();
+                                    for (String tg2 : TagLib.tagNames()) {
+                                        tagList.addView(buildTagRow(a, tg2, wlView, null));
+                                    }
+                                    masterInfo.removeAllViews();
+                                    TextView mi2 = new TextView(a);
+                                    mi2.setTextSize(11);
+                                    mi2.setTextColor(Color.parseColor("#666666"));
+                                    mi2.setText("总库 katxt：" + Cat.kaomojiCount()
+                                            + " 条（由所有标签自动汇总去重）");
+                                    masterInfo.addView(mi2);
+                                    wlView.setText(formatWhitelist());
+                                } else {
+                                    toast(a, "恢复失败，请查看日志");
+                                }
+                            }
+                        })
+                        .setNegativeButton("取消", null)
+                        .show();
+            }
+        });
+        root.addView(restoreBtn);
+
+        TextView restoreHint = new TextView(a);
+        restoreHint.setTextSize(10);
+        restoreHint.setTextColor(Color.parseColor("#888888"));
+        restoreHint.setText("误删配置后可用。内置默认来自打包时的 config/ 目录。");
+        root.addView(restoreHint);
+
+        TextView mi = new TextView(a);
+        mi.setTextSize(11);
+        mi.setTextColor(Color.parseColor("#666666"));
+        mi.setText("总库 katxt：" + Cat.kaomojiCount()
+                + " 条（由所有标签自动汇总去重）");
+        masterInfo.addView(mi);
 
         // ---- 自动发现的应用（输入法遇到过、且不在可见列表里）----
         Cat.loadSeen();
@@ -356,6 +516,146 @@ public final class ConfigUI {
         });
         row.addView(cb);
         return row;
+    }
+
+    /** 一行标签：显示名称、条数，点击进入编辑，长按删除。 */
+    private static View buildTagRow(final Activity a, final String tag,
+                                    final TextView wlView, final Runnable onChanged) {
+        float d = a.getResources().getDisplayMetrics().density;
+        LinearLayout row = new LinearLayout(a);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, (int) (8 * d), 0, (int) (8 * d));
+
+        TextView tv = new TextView(a);
+        int kaoN = TagLib.readTagKaomoji(tag).size();
+        int kwN = TagLib.readTagKeywords(tag).size();
+        tv.setText("● " + tag + "    颜文字 " + kaoN + " 条 / 关键词 " + kwN + " 条");
+        tv.setTextSize(13);
+        tv.setTextColor(Color.parseColor("#0A7D32"));
+        tv.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        tv.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showTagEditor(a, tag, onChanged);
+            }
+        });
+        row.addView(tv);
+
+        Button del = new Button(a);
+        del.setText("删除");
+        del.setTextSize(11);
+        del.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                new android.app.AlertDialog.Builder(a)
+                        .setTitle("删除标签")
+                        .setMessage("确定删除标签「" + tag + "」？\n"
+                                + "它的颜文字与关键词规则都会一并移除。")
+                        .setPositiveButton("删除", new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface dlg, int w) {
+                                if (TagLib.deleteTag(tag)) {
+                                    toast(a, "已删除：" + tag);
+                                    if (onChanged != null) {
+                                        onChanged.run();
+                                    }
+                                } else {
+                                    toast(a, "删除失败");
+                                }
+                            }
+                        })
+                        .setNegativeButton("取消", null)
+                        .show();
+            }
+        });
+        row.addView(del);
+        return row;
+    }
+
+    /**
+     * 标签编辑对话框：上下两个文本框。
+     * 上：该标签的颜文字（每行一条）
+     * 下：该标签的关键词（每行一个）
+     * 保存后自动重建总库 katxt（去重）。
+     */
+    private static void showTagEditor(final Activity a, final String tag,
+                                      final Runnable onChanged) {
+        try {
+            float d = a.getResources().getDisplayMetrics().density;
+            LinearLayout box = new LinearLayout(a);
+            box.setOrientation(LinearLayout.VERTICAL);
+            int pd = (int) (16 * d);
+            box.setPadding(pd, pd, pd, pd);
+
+            TextView l1 = new TextView(a);
+            l1.setText("颜文字（每行一条）");
+            l1.setTextSize(13);
+            box.addView(l1);
+
+            final EditText kao = new EditText(a);
+            kao.setTextSize(12);
+            kao.setGravity(Gravity.TOP | Gravity.START);
+            kao.setMinLines(4);
+            StringBuilder kb = new StringBuilder();
+            for (String k : TagLib.readTagKaomoji(tag)) {
+                kb.append(k).append('\n');
+            }
+            kao.setText(kb.toString());
+            kao.setLayoutParams(new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, (int) (150 * d)));
+            box.addView(kao);
+
+            TextView l2 = new TextView(a);
+            l2.setText("\n关键词（每行一个，句中出现即命中本标签）");
+            l2.setTextSize(13);
+            box.addView(l2);
+
+            final EditText kw = new EditText(a);
+            kw.setTextSize(12);
+            kw.setGravity(Gravity.TOP | Gravity.START);
+            StringBuilder wb = new StringBuilder();
+            for (String k : TagLib.readTagKeywords(tag)) {
+                wb.append(k).append('\n');
+            }
+            kw.setText(wb.toString());
+            kw.setLayoutParams(new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, (int) (110 * d)));
+            box.addView(kw);
+
+            TextView hint = new TextView(a);
+            hint.setTextSize(10);
+            hint.setTextColor(Color.parseColor("#888888"));
+            hint.setText("保存后立即生效，总库 katxt 会自动按所有标签汇总去重。");
+            box.addView(hint);
+
+            android.widget.ScrollView sv = new android.widget.ScrollView(a);
+            sv.addView(box);
+
+            new android.app.AlertDialog.Builder(a)
+                    .setTitle("编辑标签：" + tag)
+                    .setView(sv)
+                    .setPositiveButton("保存", new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dlg, int w) {
+                            boolean ok1 = TagLib.saveTagKaomoji(tag, kao.getText().toString());
+                            boolean ok2 = TagLib.saveTagKeywords(tag, kw.getText().toString());
+                            // 汇总去重，重建总库
+                            int total = TagLib.rebuildMasterLibrary();
+                            toast(a, (ok1 && ok2 ? "已保存" : "部分保存失败")
+                                    + "，总库 " + total + " 条");
+                            if (onChanged != null) {
+                                onChanged.run();
+                            }
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        } catch (Throwable t) {
+            Cat.log("标签编辑失败 " + t.getClass().getSimpleName());
+            toast(a, "打开编辑器失败：" + t.getClass().getSimpleName());
+        }
     }
 
     /** 日志状态描述。 */

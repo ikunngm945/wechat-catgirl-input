@@ -49,62 +49,11 @@ public final class Cat {
     private static final boolean MIAO_BEFORE_PUNCT = true;
 
     /** 内置词库（54 条）。 */
-    public static final String[] DEFAULT_KAO = {
-        "~o( =∩ω∩= )m",
-        "≡ω≡",
-        "^⌯\uD81A\uDD66⌯^ ੭ ^",
-        "⌯'ㅅ'⌯",
-        "=^\uD81A\uDD66^=",
-        "⌯•ㅅ•⌯",
-        "ฅ•̀∀•́ฅ",
-        "ฅ ̳͒•ˑ̫• ̳͒ฅ♡",
-        "ฅ(̳•·̫•̳ฅ)♡",
-        "ฅ^••^ฅ",
-        "=^•ω•^=",
-        "₍^ >ヮ<^₎",
-        "/ᐠ - ˕ -マ Ⳋ",
-        "ฅ^•ﻌ•^ฅ",
-        "ฅ՞•ﻌ•՞ฅ",
-        "(ฅ´ω`ฅ)",
-        "ฅ(*`ω´*)ฅ",
-        "ฅ꒰ ⸝˶• •˶⸝꒱ฅ",
-        "₍˄·͈༝·͈˄*₎◞ ̑̑",
-        "!!^⌯\uD81A\uDD66⌯^ ੭!!",
-        "₍^⸝⸝> ·̫ <⸝⸝ ^₎",
-        "ฅ^._.^ฅ",
-        "₍\uD83C\uDF80˄•͈༝•͈˄₎ฅ˒˒",
-        "^•͈༝•^ฅ",
-        "꒰ఎ(^ . ֑ .^)໒꒱",
-        "ฅ●ω●ฅ",
-        "₍⸍⸌·͈༝·͈⸍⸌₎◞",
-        "(>^ω^<)",
-        "ฅ^-﹃-^ฅ",
-        "^ ̳ට ̫ ට ̳^",
-        "୧₍˄·͈༝·͈˄₎୨",
-        "^ ̳ᴗ  ̫ ᴗ ̳^",
-        "˓˓ก(⸍⸌̣ʷ̣̫⸍̣⸌₎ค˒˒",
-        "ヽ(ฅ≧へ≦)ฅ",
-        "(`･ω･´)ฅ",
-        "(=^･ᴥ･^=)",
-        "(^ω^ฅ)",
-        "ฅ(≧▽≦)ฅ",
-        "ฅ(=´▽`=)ฅ",
-        "ヾ((๑˘ㅂ˘๑)ฅ",
-        "(ฅ◑ω◑ฅ)",
-        "(๑•̀ω•́ฅ)",
-        "(ฅ>ω<*ฅ)",
-        "(=^.^=)",
-        "(=´ᴥ`)",
-        "(=ↀωↀ=)",
-        "(=^-ω-^=)",
-        "ฅ(*°ω°*ฅ)",
-        "ヽ(=^･ω･^=)丿",
-        "(^•ᴥ•^)",
-        "( Φ ω Φ )",
-        "(=^x^=)",
-        "ฅ( ̳• ◡ • ̳)ฅ",
-        "o( =•ω•= )m",
-    };
+    /**
+     * 内置默认词库（来自 config/katxt，由 tools/gen_config.py 生成）。
+     * 首次运行释放；也可通过「恢复默认设置」还原。
+     */
+    public static final String[] DEFAULT_KAO = splitLines(Defaults.KAOMOJI);
 
     /** 默认白名单。 */
     public static final String[] DEFAULT_WL = {
@@ -563,6 +512,77 @@ public final class Cat {
 
     public static List<String> whitelist() {
         return whitelist;
+    }
+
+    /** 把多行文本切成数组（去空行、去注释行）。 */
+    public static String[] splitLines(String text) {
+        if (text == null || text.length() == 0) {
+            return new String[0];
+        }
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        for (String line : text.split("\n")) {
+            String t = line.trim();
+            if (t.length() > 0 && !t.startsWith("#")) {
+                out.add(t);
+            }
+        }
+        return out.toArray(new String[0]);
+    }
+
+    /**
+     * 恢复默认设置：把内置的词库、规则、标签重新写回配置目录。
+     * 用户误删配置后可用。
+     *
+     * @return 是否成功
+     */
+    public static synchronized boolean restoreDefaults() {
+        try {
+            ensureDir();
+            // 1) 词库
+            writeFile(KAO_FILE, Defaults.KAOMOJI);
+            reloadKaomoji();
+            // 2) 标签
+            File tagsDir = new File(TagLib.TAGS_DIR);
+            if (!tagsDir.isDirectory()) {
+                tagsDir.mkdirs();
+            }
+            for (File f : tagsDir.listFiles()) {
+                if (f.isFile() && f.getName().endsWith(".txt")) {
+                    f.delete();
+                }
+            }
+            for (int i = 0; i < Defaults.TAG_NAMES.length
+                    && i < Defaults.TAG_BODIES.length; i++) {
+                writeFile(TagLib.TAGS_DIR + "/" + Defaults.TAG_NAMES[i] + ".txt",
+                        Defaults.TAG_BODIES[i]);
+            }
+            // 3) 规则
+            writeFile(TagLib.RULES_FILE, Defaults.RULES);
+            // 4) 让 TagLib 强制重载
+            TagLib.forceReload();
+            // 5) 白名单恢复默认（仅当为空）
+            File wl = new File(WL_FILE);
+            if (!wl.isFile() || wl.length() == 0) {
+                StringBuilder sb = new StringBuilder();
+                for (String k : DEFAULT_WL) {
+                    sb.append(k).append('\n');
+                }
+                writeFile(WL_FILE, sb.toString());
+                loadWhitelist();
+            }
+            log("已恢复默认设置：词库 " + kaomoji.length + " 条，标签 "
+                    + TagLib.tagCount() + " 个，规则 " + TagLib.ruleCount() + " 条");
+            return true;
+        } catch (Throwable t) {
+            log("恢复默认失败 " + t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /** 强制重新读取词库（供编辑后刷新）。 */
+    public static void reloadKaomoji() {
+        kaoStamp = -2;
+        loadKaomoji();
     }
 
     /** 从全部颜文字中随机取一条（兜底用）。 */
