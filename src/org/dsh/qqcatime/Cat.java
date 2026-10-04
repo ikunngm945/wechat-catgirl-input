@@ -36,6 +36,9 @@ public final class Cat {
     public static final String WL_FILE = DIR + "/whitelist";
     public static final String LOG_FILE = DIR + "/qqime.log";
 
+    /** 供分享导出的日志（别人拿到这个文件即可排查）。 */
+    public static final String LOG_EXPORT = DIR + "/qqcat-log.txt";
+
     /** 自动发现的应用（输入法遇到过、但不在可见列表里的包名）。 */
     public static final String SEEN_FILE = DIR + "/seen";
 
@@ -131,16 +134,166 @@ public final class Cat {
     public static synchronized void log(String s) {
         try {
             File f = new File(LOG_FILE);
-            if (f.exists() && f.length() > 256 * 1024) {
+            if (f.exists() && f.length() > 512 * 1024) {
                 f.delete();
             }
             ensureDir();
             Writer w = new OutputStreamWriter(new FileOutputStream(LOG_FILE, true), "UTF-8");
-            w.write(s + "\n");
+            w.write(ts() + " " + s + "\n");
             w.flush();
             w.close();
         } catch (Throwable t) {
             // 忽略
+        }
+    }
+
+    /** 简单时间戳（不依赖 SimpleDateFormat，减少出错面）。 */
+    private static String ts() {
+        long t = System.currentTimeMillis();
+        long sec = t / 1000L;
+        long ms = t % 1000L;
+        long daySec = sec % 86400L;
+        long h = daySec / 3600L;
+        long mi = (daySec % 3600L) / 60L;
+        long se = daySec % 60L;
+        return two(h) + ":" + two(mi) + ":" + two(se) + "." + three(ms);
+    }
+
+    private static String two(long v) {
+        return v < 10 ? "0" + v : String.valueOf(v);
+    }
+
+    private static String three(long v) {
+        if (v < 10) {
+            return "00" + v;
+        }
+        if (v < 100) {
+            return "0" + v;
+        }
+        return String.valueOf(v);
+    }
+
+    /**
+     * 构建完整日志报告（含环境信息），供用户复制/分享给开发者排查。
+     *
+     * @param extraInfo 附加说明，可为 null
+     */
+    public static synchronized String buildLogReport(String extraInfo) {
+        StringBuilder sb = new StringBuilder(8192);
+        try {
+            sb.append("==== QQ猫娘模块 日志 ====\n");
+            sb.append("导出时间: ").append(ts()).append('\n');
+            sb.append("Android: ").append(android.os.Build.VERSION.RELEASE)
+                    .append(" (SDK ").append(android.os.Build.VERSION.SDK_INT).append(")\n");
+            sb.append("机型: ").append(android.os.Build.MANUFACTURER).append(' ')
+                    .append(android.os.Build.MODEL).append('\n');
+            sb.append("模块版本: ").append(Version.NAME).append(" (").append(Version.CODE).append(")\n");
+            sb.append("配置目录: ").append(DIR).append('\n');
+            sb.append("词库: ").append(kaomoji == null ? 0 : kaomoji.length).append(" 条\n");
+            sb.append("白名单: ").append(whitelist).append('\n');
+            try {
+                sb.append("标签: ").append(TagLib.tagCount())
+                        .append(" 个，规则: ").append(TagLib.ruleCount()).append(" 条\n");
+            } catch (Throwable t) {
+                sb.append("标签: 读取失败\n");
+            }
+            sb.append("进程: ").append(android.os.Process.myPid())
+                    .append(" uid=").append(android.os.Process.myUid()).append('\n');
+            if (extraInfo != null && extraInfo.length() > 0) {
+                sb.append("补充: ").append(extraInfo).append('\n');
+            }
+            sb.append("======== 运行日志 ========\n");
+
+            File f = new File(LOG_FILE);
+            if (f.isFile()) {
+                BufferedReader r = null;
+                try {
+                    r = new BufferedReader(new InputStreamReader(new FileInputStream(f), "UTF-8"));
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        sb.append(line).append('\n');
+                    }
+                } finally {
+                    if (r != null) {
+                        try { r.close(); } catch (Throwable t) { }
+                    }
+                }
+            } else {
+                sb.append("(日志文件不存在)\n");
+            }
+        } catch (Throwable t) {
+            sb.append("\n[报告构建出错 ").append(t.getClass().getSimpleName()).append("]\n");
+        }
+        return sb.toString();
+    }
+
+    /** 面板上显示用的日志（只取末尾若干行，避免界面卡顿）。 */
+    public static synchronized String readLogForDisplay() {
+        try {
+            StringBuilder head = new StringBuilder();
+            head.append("Android ").append(android.os.Build.VERSION.RELEASE)
+                    .append(" | 模块 ").append(Version.NAME)
+                    .append(" | 词库 ").append(kaomoji == null ? 0 : kaomoji.length)
+                    .append(" 条 | 标签 ").append(TagLib.tagCount())
+                    .append(" | 规则 ").append(TagLib.ruleCount()).append('\n');
+            head.append("---- 最近日志 ----\n");
+
+            File f = new File(LOG_FILE);
+            if (!f.isFile()) {
+                return head + "(暂无日志)";
+            }
+            // 只取文件末尾 12KB，避免大日志拖慢界面
+            long len = f.length();
+            long from = len > 12288 ? len - 12288 : 0;
+            java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r");
+            try {
+                raf.seek(from);
+                byte[] buf = new byte[(int) (len - from)];
+                raf.readFully(buf);
+                String tail = new String(buf, "UTF-8");
+                if (from > 0) {
+                    int nl = tail.indexOf('\n');
+                    if (nl >= 0) {
+                        tail = tail.substring(nl + 1);
+                    }
+                }
+                return head + tail;
+            } finally {
+                raf.close();
+            }
+        } catch (Throwable t) {
+            return "读取日志失败: " + t.getClass().getSimpleName();
+        }
+    }
+
+    /** 导出日志到文件（有 root 时可直接取走）。 */
+    public static synchronized String exportLog(String extraInfo) {
+        try {
+            String report = buildLogReport(extraInfo);
+            ensureDir();
+            Writer w = new OutputStreamWriter(new FileOutputStream(LOG_EXPORT), "UTF-8");
+            w.write(report);
+            w.flush();
+            w.close();
+            log("导出日志 -> " + LOG_EXPORT + " (" + report.length() + " 字符)");
+            return LOG_EXPORT;
+        } catch (Throwable t) {
+            log("导出日志失败 " + t.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    /** 清空运行日志。 */
+    public static synchronized boolean clearLog() {
+        try {
+            File f = new File(LOG_FILE);
+            if (f.exists()) {
+                f.delete();
+            }
+            log("日志已清空");
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
     }
 

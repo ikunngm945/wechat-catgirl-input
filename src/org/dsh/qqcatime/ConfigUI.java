@@ -10,6 +10,7 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -193,6 +194,80 @@ public final class ConfigUI {
             root.addView(clear);
         }
 
+        // ---- 日志 ----
+        TextView logTitle = new TextView(a);
+        logTitle.setText("\n日志（可长按复制后发给开发者）");
+        logTitle.setTextSize(14);
+        logTitle.setTextColor(Color.parseColor("#111111"));
+        root.addView(logTitle);
+
+        final TextView logInfo = new TextView(a);
+        logInfo.setTextSize(11);
+        logInfo.setTextColor(Color.parseColor("#666666"));
+        String shown = Cat.readLogForDisplay();
+        logInfo.setText(shown);
+        logInfo.setTextIsSelectable(true);   // 允许长按选中复制
+
+        // 日志正文放进一个限高可滚动的框里，避免撑爆面板
+        android.widget.ScrollView logBox = new android.widget.ScrollView(a);
+        int boxH = (int) (a.getResources().getDisplayMetrics().heightPixels * 0.22f);
+        logBox.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, boxH));
+        logBox.setBackgroundColor(Color.parseColor("#FFFFFF"));
+        int p8 = (int) (8 * d);
+        logBox.setPadding(p8, p8, p8, p8);
+        logBox.addView(logInfo);
+        root.addView(logBox);
+
+        LinearLayout logBtns = new LinearLayout(a);
+        logBtns.setOrientation(LinearLayout.HORIZONTAL);
+        logBtns.setPadding(0, (int) (8 * d), 0, 0);
+
+        Button copyBtn = new Button(a);
+        copyBtn.setText("复制全部日志");
+        copyBtn.setTextSize(12);
+        copyBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try {
+                    String full = Cat.buildLogReport("用户复制");
+                    android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager)
+                                    a.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText(
+                                "QQ猫娘日志", full));
+                        toast(a, "日志已复制，去聊天框长按粘贴即可发送");
+                    }
+                } catch (Throwable t) {
+                    toast(a, "复制失败：" + t.getClass().getSimpleName());
+                }
+                logInfo.setText(Cat.readLogForDisplay());
+            }
+        });
+        logBtns.addView(copyBtn);
+
+        Button clearBtn = new Button(a);
+        clearBtn.setText("清空");
+        clearBtn.setTextSize(12);
+        clearBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Cat.clearLog();
+                logInfo.setText(Cat.readLogForDisplay());
+                toast(a, "日志已清空");
+            }
+        });
+        logBtns.addView(clearBtn);
+        root.addView(logBtns);
+
+        TextView logHint = new TextView(a);
+        logHint.setText("点「复制全部日志」，粘贴到任意聊天框发送给开发者即可。"
+                + "日志只记录运行状态，不含聊天内容。");
+        logHint.setTextSize(10);
+        logHint.setTextColor(Color.parseColor("#888888"));
+        root.addView(logHint);
+
         // 提示
         TextView tip = new TextView(a);
         tip.setText("\n改动立即生效，无需重启输入法。");
@@ -281,6 +356,26 @@ public final class ConfigUI {
         });
         row.addView(cb);
         return row;
+    }
+
+    /** 日志状态描述。 */
+    private static String logStat() {
+        try {
+            java.io.File f = new java.io.File(Cat.LOG_FILE);
+            long len = f.isFile() ? f.length() : 0;
+            return "当前日志 " + (len / 1024) + " KB\n路径：" + Cat.LOG_FILE;
+        } catch (Throwable t) {
+            return "日志不可读";
+        }
+    }
+
+    /** 弹一个 Toast，失败时静默。 */
+    private static void toast(Activity a, String msg) {
+        try {
+            android.widget.Toast.makeText(a, msg, android.widget.Toast.LENGTH_LONG).show();
+        } catch (Throwable t) {
+            // 忽略
+        }
     }
 
     private static String formatWhitelist() {
