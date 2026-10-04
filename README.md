@@ -28,7 +28,7 @@ WRITE host=com.tencent.mm ok=true from=[我爱你。] to=[本喵爱主人喵。=
 ### 1. 安装模块
 
 ```sh
-pm install -r QQCatIME-7.0.apk
+pm install -r QQCatIME-7.7.apk
 ```
 
 ### 2. 在 LSPosed 里启用（必须手动，无法脚本化）
