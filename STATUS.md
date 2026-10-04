@@ -1,5 +1,9 @@
 # 路线 B 状态：双向打通（读 + 写）
 
+> **当前版本 v7.7**（`dist/QQCatIME-7.7.apk`）。本文件下方的「里程碑 / 当前产物」
+> 记录的是最早的验证阶段（v0.3），保留作证据；最新功能见
+> [README.md](README.md) 与 [ROADMAP.md](ROADMAP.md)。
+
 ## 里程碑（2026-10-03 实测确认）
 
 | 能力 | 状态 | 证据 |
@@ -18,7 +22,7 @@
 
 - 源码：`/root/dsh/qqcat-ime/src/org/dsh/qqcatime/Probe.java`
 - 构建：`python3.12 /root/dsh/qqcat-ime/build.py`
-- APK：`dist/QQCatIME-0.3.apk`（生产版，写回测试已关闭）
+- APK：`dist/QQCatIME-7.7.apk`（当前版本）
 - 已安装于设备，LSPosed 已启用，作用域 = com.tencent.wetype
 
 ## 构建/部署要点（勿踩坑）

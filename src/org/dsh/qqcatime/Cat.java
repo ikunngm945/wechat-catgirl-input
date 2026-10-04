@@ -599,6 +599,19 @@ public final class Cat {
         return kaomoji.length;
     }
 
+    /** 当前词库的全部颜文字（只读副本，供向量索引使用）。 */
+    public static List<String> kaomojiList() {
+        List<String> out = new ArrayList<String>();
+        if (kaomoji != null) {
+            for (String k : kaomoji) {
+                if (k != null && k.length() > 0) {
+                    out.add(k);
+                }
+            }
+        }
+        return out;
+    }
+
     public static void writeFile(String path, String content) {
         try {
             ensureDir();
@@ -635,6 +648,23 @@ public final class Cat {
     }
 
     /**
+     * 句子去掉标点和空白后是否还有实际内容。
+     * 「。」「555。」这类残句没内容可比，不该拿去问向量模型（浪费额度也拿不到好结果）。
+     */
+    public static boolean hasContent(String s) {
+        if (s == null) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!isBlank(c) && !isPunct(c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 是否存在「尚未喵化」的句末标点 —— 这才是触发条件。
      * 判定时向前跳过空白；已有喵的标点不再重复处理，因此不会反复改写。
      */
@@ -662,7 +692,10 @@ public final class Cat {
             char c = s.charAt(i);
             if (c == '喵') {
                 int j = i + 1;
-                while (j < s.length() && (s.charAt(j) == '喵' || isBlank(s.charAt(j)))) {
+                // 只跳过空白，不跳过紧邻的其它「喵」：
+                // 否则「喵喵喵喵喵喵。」会被逐个吞掉只剩一个「喵」。
+                // 这里只需删掉紧贴标点的那一个「喵」（幂等），中间的喵是用户自己打的。
+                while (j < s.length() && isBlank(s.charAt(j))) {
                     j++;
                 }
                 if (j < s.length() && isPunct(s.charAt(j))) {
@@ -773,40 +806,108 @@ public final class Cat {
         return head + suffix + sentence.substring(punctStart);
     }
 
-    private static String withKaomojiPerSentence(String core) {
-        TagLib.load();
-        String suf = Config.suffixEnabled() ? Config.suffix() : "";
-        boolean kaoOn = Config.kaomojiEnabled();
-        StringBuilder sb = new StringBuilder();
+    /**
+     * 按句末标点切句，每句含结尾标点。
+     * 末尾没有标点的残句也算一句。
+     *
+     * <p>切法与 {@link #withKaomojiPerSentence} 完全一致，
+     * 供「事前向量预取」在改写之前先取出需要处理的句子。
+     */
+    public static List<String> splitSentences(String core) {
+        List<String> out = new ArrayList<String>();
+        if (core == null || core.length() == 0) {
+            return out;
+        }
         StringBuilder cur = new StringBuilder();
         for (int i = 0; i < core.length(); i++) {
             char c = core.charAt(i);
             cur.append(c);
             if (isPunct(c)) {
-                String one = cur.toString();
-                sb.append(endWithSuffix(one, suf));
-                if (kaoOn) {
-                    String k = TagLib.pick(one);
-                    if (k.length() > 0) {
-                        sb.append(k);
-                    }
-                }
+                out.add(cur.toString());
                 cur.setLength(0);
             }
         }
-        // 末尾残句（没有标点收尾）也要补后缀 + 颜文字
         if (cur.length() > 0) {
-            String tail = cur.toString();
-            if (tail.trim().length() > 0) {
-                sb.append(endWithSuffix(tail, suf));
-                if (kaoOn) {
-                    String k = TagLib.pick(tail);
-                    if (k.length() > 0) {
-                        sb.append(k);
+            out.add(cur.toString());
+        }
+        return out;
+    }
+
+    /**
+     * 是否「有活可干」—— 供轮询在改写前先判断，避免白算一遍。
+     * 判定标准与 {@link #transform} 相同：存在尚未喵化的句末标点。
+     */
+    public static boolean needsWork(String input) {
+        if (input == null || input.length() == 0) {
+            return false;
+        }
+        return needsMiao(stripKaomoji(input));
+    }
+
+    /**
+     * 是否以句末标点结尾 —— 用于判断这是不是一个「已经打完的句子」。
+     *
+     * <p>事前向量预取只对打完的句子发起，避免打字过程中乱发网络请求。
+     */
+    public static boolean endsWithPunct(String s) {
+        if (s == null || s.length() == 0) {
+            return false;
+        }
+        int i = s.length() - 1;
+        while (i >= 0 && isBlank(s.charAt(i))) {
+            i--;
+        }
+        return i >= 0 && isPunct(s.charAt(i));
+    }
+
+    /**
+     * 取「真正需要挑选颜文字的句子」列表。
+     *
+     * <p>走的是与改写完全相同的预处理（去颜文字 → 去喵 → 替换人称），
+     * 因此这里得到的句子就是随后 {@link #withKaomojiPerSentence} 里
+     * 拿去选颜文字的那一批，供事前向量预取与事后记录保持同一套键。
+     */
+    public static List<String> sentencesFor(String input) {
+        List<String> none = new ArrayList<String>();
+        if (input == null || input.length() == 0) {
+            return none;
+        }
+        String stripped = stripKaomoji(input);
+        String core = Config.applyReplace(stripSentenceMiao(stripped));
+        return splitSentences(core);
+    }
+
+    private static String withKaomojiPerSentence(String core) {
+        TagLib.load();
+        String suf = Config.suffixEnabled() ? Config.suffix() : "";
+        boolean kaoOn = Config.kaomojiEnabled();
+        StringBuilder sb = new StringBuilder();
+        List<String> sents = splitSentences(core);
+        for (int i = 0; i < sents.size(); i++) {
+            String one = sents.get(i);
+            boolean last = (i == sents.size() - 1);
+            boolean ended = one.length() > 0 && isPunct(one.charAt(one.length() - 1));
+            // 末尾纯空白的残句原样保留，不加后缀也不加颜文字
+            if (last && !ended && one.trim().length() == 0) {
+                sb.append(one);
+                continue;
+            }
+            sb.append(endWithSuffix(one, suf));
+            if (kaoOn) {
+                TagLib.Pick p = TagLib.pickEx(one);
+                String k = p.kaomoji;
+                if (k.length() > 0) {
+                    sb.append(k);
+                    // 只有「真的问过向量模型、并且命中了」的结果才写进记忆库。
+                    //
+                    // 关键词规则或全库随机挑出来的**不写** —— 否则一次随机
+                    // 命中会被永久固化成「完全相同命中」，之后每次同样的句子
+                    // 都强行用那个可能是错的颜文字，且再也不会去问向量。
+                    // 用户要求（m03997）：没经过向量的禁止写入 memory.txt。
+                    if (TagLib.SRC_VECTOR.equals(p.source)) {
+                        Vector.note(one, k);
                     }
                 }
-            } else {
-                sb.append(tail);
             }
         }
         return sb.toString();

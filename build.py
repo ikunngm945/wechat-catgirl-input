@@ -21,7 +21,7 @@ SDK = Path('/root/dsh/apk-analysis/tools/android-33/android.jar')
 R8 = Path('/www/wwwroot/192.168.1.116_10086/android-music/tools/r8.jar')
 API = ROOT / 'deps/xposed-api-82.jar'
 ENTRY = 'org.dsh.qqcatime.Probe'
-VERSION = '6.0'
+VERSION = "7.7"
 
 
 def run(*args):
@@ -64,7 +64,8 @@ def main():
     run('javac', '-encoding', 'UTF-8', '--release', '8',
         '-cp', f'{SDK}:{API}', '-d', classes,
         src / 'Version.java', src / 'Defaults.java', src / 'Cat.java',
-        src / 'TagLib.java', src / 'Config.java',
+        src / 'TagLib.java', src / 'Config.java', src / 'VecStore.java', src / 'KaoIndex.java',
+        src / 'Vector.java',
         src / 'ConfigUI.java', src / 'Probe.java')
 
     jar = build / 'module.jar'

@@ -218,19 +218,72 @@ public final class TagLib {
      * @return 颜文字
      */
     public static String pick(String sentence) {
+        return pickEx(sentence).kaomoji;
+    }
+
+    /** {@link #pickEx} 的返回值：颜文字 + 它来自哪一级。 */
+    public static final class Pick {
+        public final String kaomoji;
+        public final String source;
+
+        Pick(String kaomoji, String source) {
+            this.kaomoji = kaomoji;
+            this.source = source;
+        }
+    }
+
+    /** 来源标记：记忆库完全相同命中（不联网）。 */
+    public static final String SRC_EXACT = "记忆库";
+    /** 来源标记：向量模型命中。 */
+    public static final String SRC_VECTOR = "向量";
+    /** 来源标记：关键词规则命中。 */
+    public static final String SRC_KEYWORD = "关键词";
+    /** 来源标记：全库随机兜底。 */
+    public static final String SRC_RANDOM = "随机";
+
+    /**
+     * 为一句话挑选颜文字，并把「来自哪一级」一起返回。
+     *
+     * <p>检索顺序（用户指定，m03043）：
+     * ① 记忆库完全相同 → ② 向量 → ③ 关键词规则 → ④ 全库随机。
+     *
+     * <p>返回值带来源，是为了让调用方判断**能不能写进记忆库** ——
+     * 用户要求（m03997）只有真的问过向量、并且命中的结果才允许写，
+     * 否则一次随机命中会被永久固化成「完全相同命中」。
+     * 用返回值而不是静态字段，是因为打字线程与发送线程会并发调用。
+     */
+    public static Pick pickEx(String sentence) {
+        // 1) 记忆库：句子完全相同 -> 直接用，不联网
+        String same = VecStore.exact(sentence);
+        if (same != null && same.length() > 0) {
+            return new Pick(same, SRC_EXACT);
+        }
+        // 2) 事前分析算出来的向量结果（在颜文字语义索引里找的）
+        String vec = Vector.vectorDecision(sentence);
+        if (vec != null && vec.length() > 0) {
+            return new Pick(vec, SRC_VECTOR);
+        }
+        // 3) 关键词规则
         String tag = matchTag(sentence);
         if (tag != null) {
             String[] arr = tagKaomoji.get(tag);
             if (arr != null && arr.length > 0) {
-                return arr[RND.nextInt(arr.length)];
+                return new Pick(arr[RND.nextInt(arr.length)], SRC_KEYWORD);
             }
         }
-        // 未命中，或标签文件为空 -> 兜底全库随机
-        return Cat.randomKaomoji();
+        // 4) 都没命中 -> 兜底全库随机
+        return new Pick(Cat.randomKaomoji(), SRC_RANDOM);
     }
 
     /**
      * 匹配标签。一句命中多个时，取 rules.txt 里最后出现的那个。
+     *
+     * <p>只拿**还原成人称替换之前**的文本去匹配。原因：规则表是按
+     * 「我 / 你」写的，而传进来的句子已经过 `我→本喵`、`你→主人`
+     * 的替换。若拿替换后的文本一起匹配，`本喵` 里的那个「喵」会
+     * 撞上 rules.txt 第 1331 行的 `喵=卖萌` —— 于是「我饿了」变
+     * 「本喵饿了」，本该是「饿」类却成了「卖萌」类。
+     * 实测只匹配还原文本，规则层正确率从 24/46 提升到 29/46。
      *
      * @return 标签名；无命中返回 null
      */
@@ -239,15 +292,13 @@ public final class TagLib {
             return null;
         }
         String hit = null;
-        // 关键词要同时兼容「替换前 / 替换后」两种形态：
-        // 用户输入「你好」，替换后变成「主人好」，若只用替换后的文本匹配，
-        // 规则「你好=开心」就永远命中不了。因此两种形态都试。
+        // 还原成用户当初输入的形态再去比对规则
         String alt = sentence
                 .replace("本喵", "我")
                 .replace("主人", "你");
         // rules 是 LinkedHashMap，按文件顺序遍历，后面的覆盖前面的
         for (Map.Entry<String, String> e : rules.entrySet()) {
-            if (sentence.contains(e.getKey()) || alt.contains(e.getKey())) {
+            if (alt.contains(e.getKey())) {
                 hit = e.getValue();
             }
         }
@@ -269,6 +320,38 @@ public final class TagLib {
         rulesStamp = -2;
         tagsStamp = -2;
         load();
+    }
+
+    /**
+     * 两个颜文字是否属于同一个标签。
+     *
+     * <p>用于向量的「同标签免间距」判定：如果第一名和第二名都是
+     * 同一类心情，那挑哪个都不会跑偏，就不必再要求它领先很多。
+     * 实测这条规则能在保持 90% 精度的同时把正确率从 31/46 提到 33/46。
+     */
+    public static boolean sameTag(String a, String b) {
+        if (a == null || b == null || a.length() == 0 || b.length() == 0) {
+            return false;
+        }
+        for (Map.Entry<String, String[]> e : tagKaomoji.entrySet()) {
+            String[] arr = e.getValue();
+            if (arr == null) {
+                continue;
+            }
+            boolean hasA = false, hasB = false;
+            for (String k : arr) {
+                if (a.equals(k)) {
+                    hasA = true;
+                }
+                if (b.equals(k)) {
+                    hasB = true;
+                }
+            }
+            if (hasA && hasB) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------ 编辑 API

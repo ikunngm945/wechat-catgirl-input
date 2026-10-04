@@ -259,6 +259,9 @@ public final class ConfigUI {
         help.setTextIsSelectable(true);
         root.addView(help);
 
+        // ---- 向量模型 ----
+        root.addView(buildVectorPanel(a, d));
+
         // 词库信息
         Cat.loadKaomoji();
         Cat.loadWhitelist();
@@ -825,6 +828,374 @@ public final class ConfigUI {
                     }
                 });
         row.addView(sw);
+        return row;
+    }
+
+    /**
+     * 向量模型设置区块。
+     *
+     * 填 接口地址 / API Key / 模型名，维度可留 auto 自动识别；
+     * 开启后：检测到句末标点时先拿句子去 memory.txt 里找完全相同记录，
+     * 没有就请求向量模型找最相似的一条；都不中则回退关键词规则。
+     */
+    static View buildVectorPanel(final Activity a, final float d) {
+        final LinearLayout box = new LinearLayout(a);
+        box.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(a);
+        title.setText("\n向量模型（句子匹配颜文字）");
+        title.setTextSize(14);
+        title.setTextColor(Color.parseColor("#111111"));
+        box.addView(title);
+
+        final LinearLayout inner = new LinearLayout(a);
+        inner.setOrientation(LinearLayout.VERTICAL);
+        box.addView(inner);
+
+        // 匿名类里要回调自身刷新，用数组持有引用绕开“未初始化”限制
+        final Runnable[] holder = new Runnable[1];
+        final Runnable refresh = new Runnable() {
+            @Override
+            public void run() {
+                inner.removeAllViews();
+                Vector.load();
+
+                inner.addView(buildSwitchRow(a, "启用向量模型", Vector.enabled(),
+                        new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Vector.save(v, Vector.preEnabled(), Vector.url(), Vector.KEEP_KEY,
+                                        Vector.model(), Vector.dimText(),
+                                        Vector.minScore());
+                                run();
+                            }
+                        }));
+
+                inner.addView(buildSwitchRow(a, "事前分析（打字时就用）",
+                        Vector.preEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Vector.save(Vector.enabled(), v, Vector.url(),
+                                        Vector.KEEP_KEY, Vector.model(),
+                                        Vector.dimText(), Vector.minScore());
+                                run();
+                            }
+                        }));
+
+                inner.addView(field(a, d, "接口地址", Vector.url(),
+                        "https://api.siliconflow.cn/v1", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                Vector.save(Vector.enabled(), Vector.preEnabled(), v, Vector.KEEP_KEY,
+                                        Vector.model(), Vector.dimText(),
+                                        Vector.minScore());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "API Key", "",
+                        Vector.hasKey() ? "已配置（留空保持不变）"
+                                        : "sk-... 填入后不再回显", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                // Key 只写不可读：留空 = 保持原值，
+                                // 想清空用旁边的「清除 Key」。
+                                Vector.save(Vector.enabled(), Vector.preEnabled(), Vector.url(),
+                                        v.length() == 0 ? Vector.KEEP_KEY : v,
+                                        Vector.model(), Vector.dimText(),
+                                        Vector.minScore());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "模型名", Vector.model(),
+                        "Qwen/Qwen3-Embedding-0.6B", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                Vector.save(Vector.enabled(), Vector.preEnabled(), Vector.url(),
+                                        Vector.KEEP_KEY, v, Vector.dimText(),
+                                        Vector.minScore());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "维度", "auto".equals(Vector.dimText())
+                                ? "auto" : Vector.dimText(),
+                        "auto = 自动识别", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                Vector.save(Vector.enabled(), Vector.preEnabled(), Vector.url(),
+                                        Vector.KEEP_KEY, Vector.model(), v,
+                                        Vector.minScore());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "相似度阈值", String.valueOf(Vector.minScore()),
+                        "0.42", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                float ms = Vector.minScore();
+                                try {
+                                    ms = Float.parseFloat(v.trim());
+                                } catch (Throwable t) {
+                                    // 保持原值
+                                }
+                                Vector.save(Vector.enabled(), Vector.preEnabled(), Vector.url(),
+                                        Vector.KEEP_KEY, Vector.model(),
+                                        Vector.dimText(), ms);
+                            }
+                        }));
+
+                inner.addView(field(a, d, "领先间距", String.valueOf(Vector.minMargin()),
+                        "0.015", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                float mg = Vector.minMargin();
+                                try {
+                                    mg = Float.parseFloat(v.trim());
+                                } catch (Throwable t) {
+                                    // 保持原值
+                                }
+                                Vector.save(Vector.enabled(), Vector.preEnabled(), Vector.url(),
+                                        Vector.KEEP_KEY, Vector.model(),
+                                        Vector.dimText(), Vector.minScore(), mg);
+                            }
+                        }));
+
+                // 操作按钮
+                LinearLayout btns = new LinearLayout(a);
+                btns.setOrientation(LinearLayout.HORIZONTAL);
+                btns.setPadding(0, (int) (4 * d), 0, (int) (4 * d));
+
+                Button test = new Button(a);
+                test.setText("测试连接");
+                test.setTextSize(11);
+                test.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        // 联网必须在后台线程，主线程会抛 NetworkOnMainThreadException
+                        toast(a, "正在测试连接…");
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                final String r = Vector.test("你好");
+                                a.runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        toast(a, r);
+                                        if (holder[0] != null) {
+                                            holder[0].run();
+                                        }
+                                    }
+                                });
+                            }
+                        }, "qqcat-vec-test").start();
+                    }
+                });
+                btns.addView(test);
+
+                Button clrKey = new Button(a);
+                clrKey.setText("清除 Key");
+                clrKey.setTextSize(11);
+                clrKey.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        new android.app.AlertDialog.Builder(a)
+                                .setTitle("清除 API Key")
+                                .setMessage("确定要删除已保存的 API Key 吗？"
+                                        + "删除后需要重新填写才能使用向量模型。")
+                                .setPositiveButton("清除", new android.content.DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(android.content.DialogInterface di, int w) {
+                                        Vector.clearKey();
+                                        toast(a, "Key 已清除");
+                                        run();
+                                    }
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    }
+                });
+                btns.addView(clrKey);
+
+                Button build = new Button(a);
+                build.setText("重建向量");
+                build.setTextSize(11);
+                build.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        final String why = Vector.indexStale();
+                        String msg = "要用向量模型给词库里的每一条颜文字算一次语义向量，"
+                                + "大约需要 1~2 秒并消耗一次接口额度。\n\n"
+                                + "当前词库里"
+                                + KaoIndex.indexable(Cat.kaomojiList())
+                                + " 条颜文字带语义描述，会进入索引。";
+                        if (why != null) {
+                            msg = "检测到：" + why + "，建议重建。\n\n" + msg;
+                        }
+                        new android.app.AlertDialog.Builder(a)
+                                .setTitle("重建颜文字向量索引")
+                                .setMessage(msg)
+                                .setPositiveButton("开始重建", new android.content.DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(android.content.DialogInterface di, int w) {
+                                        String r = Vector.rebuildIndex(true);
+                                        toast(a, r);
+                                        run();
+                                        // 后台在跑，每 1.2 秒刷新一次状态直到结束
+                                        final android.os.Handler h = new android.os.Handler(
+                                                android.os.Looper.getMainLooper());
+                                        h.postDelayed(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                if (holder[0] != null) {
+                                                    holder[0].run();
+                                                }
+                                                if (Vector.rebuilding()) {
+                                                    h.postDelayed(this, 1200);
+                                                } else {
+                                                    toast(a, Vector.rebuildStatus());
+                                                }
+                                            }
+                                        }, 1200);
+                                    }
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    }
+                });
+                btns.addView(build);
+
+                Button clear = new Button(a);
+                clear.setText("清空记忆库");
+                clear.setTextSize(11);
+                clear.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        new android.app.AlertDialog.Builder(a)
+                                .setTitle("清空记忆库")
+                                .setMessage("确定要删除 memory.txt 里记录的全部"
+                                        + "「句子=颜文字」吗？删除后需要重新积累。")
+                                .setPositiveButton("清空", new android.content.DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(android.content.DialogInterface di, int w) {
+                                        VecStore.clear();
+                                        Vector.resetCache();
+                                        toast(a, "记忆库已清空");
+                                        run();
+                                    }
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    }
+                });
+                btns.addView(clear);
+                inner.addView(btns);
+
+                TextView stat = new TextView(a);
+                stat.setTextSize(11);
+                stat.setTextColor(Color.parseColor("#666666"));
+                String stale = Vector.indexStale();
+                stat.setText("状态：" + Vector.lastStatus()
+                        + "\n记忆库：" + VecStore.count() + " 条"
+                        + "\n颜文字索引：" + KaoIndex.describe()
+                        + (Vector.rebuilding() ? "（正在重建…）"
+                           : (stale != null ? "　⚠ " + stale + "，需重建" : "　✓ 最新"))
+                        + "\n事前分析：" + (Vector.preEnabled() ? "开" : "关（只做事后分析）")
+                        + "\n接口地址：" + Vector.endpoint()
+                        + "\n模型：" + (Vector.model().length() > 0 ? Vector.model() : "未填写")
+                        + "\n相似度阈值：" + Vector.minScore()
+                        + "　领先间距：" + Vector.minMargin()
+                        + "\nKey：" + (Vector.hasKey() ? "已配置（不回显）" : "未配置")
+                        + "\n记忆库文件：" + VecStore.FILE
+                        + "\n索引文件：" + KaoIndex.FILE
+                        + "\n配置文件：" + Vector.CFG_FILE
+                        + "\nKey 文件：" + Vector.KEY_FILE);
+                stat.setTextIsSelectable(true);
+                inner.addView(stat);
+
+                TextView hint = new TextView(a);
+                hint.setTextSize(11);
+                hint.setTextColor(Color.parseColor("#666666"));
+                hint.setText(
+                    "\n检索顺序（每句最多一个颜文字）：\n"
+                  + "  1. 记忆库完全相同 → 直接用（不联网）\n"
+                  + "  2. 向量：把句子交给模型，在颜文字语义索引里找最贴近的一条。\n"
+                  + "     要同时满足两个条件才用：\n"
+                  + "       ① 相似度 >= 相似度阈值\n"
+                  + "       ② 第一名比第二名高出的分 >= 领先间距\n"
+                  + "     两条一起卡，是为了避免在一堆「差不多的颜文字」里瞎挑。\n"
+                  + "     例外：前两名属于同一个标签（同类心情）时免看领先间距。\n"
+                  + "  3. 关键词规则（「标签与词库」里配的）。\n"
+                  + "  4. 都没命中 → 全库随机。\n"
+                  + "  · 命中之后，这个句子会自动记进记忆库，越用越准。\n"
+                  + "  · 向量问过的句子，即使没达上面两个门槛，也会把「最接近的\n"
+                  + "    那条」记进记忆库（值来自向量，不是随机）——所以同一句话\n"
+                  + "    第一次可能随机、第二次起就按记忆库稳定输出，也不再重复请求。\n"
+                  + "  · 关键词规则与全库随机的结果不写记忆库。\n"
+                  + "  · 记忆库存的时候会去掉句末的 。．；;… —— 所以\n"
+                  + "    「我喜欢你。」与「我喜欢你」是同一条；但 ？与！ 各存各的。\n"
+                  + "\n事前分析 / 事后分析：\n"
+                  + "  · 事前分析 = 打字打出标点时先请求一次，当场选出颜文字。\n"
+                  + "  · 事后分析 = 把用过的句子记进记忆库，供以后检索。\n"
+                  + "  · 事前分析开着时，事后分析照常进行（事前包含事后）。\n"
+                  + "  · 事前分析关掉 = 只做事后分析，打字过程中不联网，\n"
+                  + "    已经记下的句子仍然能靠「完全相同」命中。\n"
+                  + "  · 关掉总开关则完全不请求网络，只用关键词规则。\n"
+                  + "\n颜文字向量索引：\n"
+                  + "  · 索引是把每条颜文字的「语义描述」向量化后存进 kaovec.txt。\n"
+                  + "  · 改过词库或换过模型后，这里会提示「需重建」，\n"
+                  + "    点上面的「重建向量」重新生成（约 1~2 秒）。\n"
+                  + "  · 模块不会自动重建，免得白白消耗额度。\n"
+                  + "\n"
+                  + "关于 API Key：保存后不再回显，只显示「已配置」。\n"
+                  + "想换就填新的再保存；想删用「清除 Key」。\n"
+                  + "配置存于 vector.yaml（Key 只写不可读）。\n"
+                  + "接口地址填到 /v1 即可，会自动补 /embeddings。"
+                );
+                inner.addView(hint);
+            }
+        };
+        holder[0] = refresh;
+        refresh.run();
+        return box;
+    }
+
+    /** 一行「标签 + 输入框 + 保存按钮」。 */
+    private interface Saver {
+        void save(String value);
+    }
+
+    private static View field(final Activity a, float d, String label,
+                              String value, String hintText, final Saver saver) {
+        LinearLayout row = new LinearLayout(a);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, (int) (3 * d), 0, (int) (3 * d));
+
+        TextView lab = new TextView(a);
+        lab.setText(label + "：");
+        lab.setTextSize(12);
+        lab.setMinWidth((int) (72 * d));
+        row.addView(lab);
+
+        final EditText in = new EditText(a);
+        in.setTextSize(12);
+        in.setText(value == null ? "" : value);
+        in.setHint(hintText);
+        in.setSingleLine(true);
+        in.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(in);
+
+        Button save = new Button(a);
+        save.setText("保存");
+        save.setTextSize(11);
+        save.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                saver.save(in.getText().toString().trim());
+                toast(a, "已保存");
+            }
+        });
+        row.addView(save);
         return row;
     }
 

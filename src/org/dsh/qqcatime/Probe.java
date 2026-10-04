@@ -8,6 +8,7 @@ import android.view.inputmethod.InputConnection;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -36,11 +37,11 @@ public final class Probe implements IXposedHookLoadPackage {
 
     private static final String TAG = "QQCatIME";
 
-    /** 轮询间隔（毫秒）。 */
-    private static final long POLL_MS = 500;
+    /** 轮询间隔（毫秒）。标点触发要求 100ms 内响应。 */
+    private static final long POLL_MS = 100;
 
-    /** 内容连续 N 轮不变才动手，避免打断输入法拼字。 */
-    private static final int SETTLE_POLLS = 2;
+    /** 内容连续 N 轮不变才动手，避免打断输入法拼字。100ms x 5 = 500ms 稳定。 */
+    private static final int SETTLE_POLLS = 5;
 
     private static volatile InputMethodService service;
 
@@ -58,10 +59,31 @@ public final class Probe implements IXposedHookLoadPackage {
     private static volatile long icComposingAt = 0L;
 
     /** 组合结束后的静默期：避免轮询与输入法抢写。 */
-    private static final long COMPOSE_QUIET_MS = 1200;
+    private static final long COMPOSE_QUIET_MS = 300;
 
     /** 拼写标志超过此时长未刷新，即视为失效（兜底，防卡死）。 */
     private static final long COMPOSE_STALE_MS = 3000;
+
+    /**
+     * 标点触发时，最多等向量模型多久。
+     * 超时就直接用标签规则，绝不因为网络慢把输入卡住。
+     */
+    private static final long VEC_WAIT_MS = 1500;
+
+    /**
+     * 发送前兜底最多等向量的时间。
+     *
+     * <p>比打字路径的 1500ms 短：发送是用户按下去的动作，
+     * 等太久会明显卡顿。常见请求 300~600ms 能回来，800ms 足够。
+     */
+    private static final long SEND_WAIT_MS = 800;
+
+    /**
+     * 配置热重载的最小间隔。
+     * 轮询已经拉到 100ms，若每轮都 stat 一遍配置和词库纯属浪费；
+     * 1 秒对「改完文件立刻生效」的体感没有区别。
+     */
+    private static final long CFG_RELOAD_MS = 1000;
 
     /**
      * 是否应当让路给输入法。
@@ -101,6 +123,7 @@ public final class Probe implements IXposedHookLoadPackage {
             Cat.loadWhitelist();
             Config.load();
             TagLib.load();
+            Vector.load();
             log("配置就绪：词库 " + Cat.kaomojiCount() + " 条，白名单 "
                     + Cat.whitelist().size() + " 个，标签 " + TagLib.tagCount()
                     + " 个，规则 " + TagLib.ruleCount() + " 条");
@@ -240,6 +263,7 @@ public final class Probe implements IXposedHookLoadPackage {
             Cat.loadWhitelist();
             Config.load();
             TagLib.load();
+            Vector.load();
 
             // 取全部文本（游标前后都要，因为语音上屏后光标位置不定）
             CharSequence beforeCs = ic.getTextBeforeCursor(2000, 0);
@@ -249,6 +273,20 @@ public final class Probe implements IXposedHookLoadPackage {
             String cur = before + after;
             if (cur.length() == 0) {
                 return;
+            }
+            // 发送前兜底：语音输入与回车键发送都不走「打字轮询」那条路，
+            // 也就没有事前预取。这里主动问一次向量模型并等一小会儿，
+            // 命中就当场用；超时或未命中就用规则结果，绝不卡死输入法。
+            //
+            // 注意：只有向量真的命中了，结果才会写进 memory.txt
+            //（见 Cat.withKaomojiPerSentence 里的 TagLib.SRC_VECTOR 判断）。
+            if (Vector.enabled()) {
+                long t0 = System.currentTimeMillis();
+                Vector.consultAll(Cat.sentencesFor(cur), SEND_WAIT_MS);
+                long cost = System.currentTimeMillis() - t0;
+                if (cost >= 50) {
+                    log("SEND_CONSULT 等了 " + cost + "ms，就绪=" + Vector.readyAll(Cat.sentencesFor(cur)));
+                }
             }
             // 语音识别常无句末标点，用宽松模式：人称替换 + 颜文字必定执行
             String want = Cat.transformLoose(cur);
@@ -335,6 +373,7 @@ public final class Probe implements IXposedHookLoadPackage {
                 String pending = null;
                 String lastHost = null;
                 int stable = 0;
+                long lastReload = 0L;
 
                 while (true) {
                     try {
@@ -344,11 +383,18 @@ public final class Probe implements IXposedHookLoadPackage {
                             continue;
                         }
 
-                        Cat.loadKaomoji();
-                        Cat.loadWhitelist();
-                        Cat.loadSeen();
-                        Config.load();
-                        TagLib.load();
+                        // 热重载节流：轮询是 100ms，每秒 stat 十次纯属浪费。
+                        // 用户改完文件一秒内生效，感知上仍是「立即」。
+                        long now = System.currentTimeMillis();
+                        if (now - lastReload >= CFG_RELOAD_MS) {
+                            lastReload = now;
+                            Cat.loadKaomoji();
+                            Cat.loadWhitelist();
+                            Cat.loadSeen();
+                            Config.load();
+                            TagLib.load();
+                            Vector.load();
+                        }
 
                         EditorInfo ei = svc.getCurrentInputEditorInfo();
                         String host = (ei == null || ei.packageName == null)
@@ -401,6 +447,28 @@ public final class Probe implements IXposedHookLoadPackage {
                         if (cur.equals(lastSeen)) {
                             Thread.sleep(POLL_MS);
                             continue;
+                        }
+
+                        // 事前调用：只有这一种触发方式 —— 检测到用户刚打完
+                        // 一个句末标点，才把这句丢给向量模型去比对。
+                        // 打字中途不发请求，避免每个字符都联网。
+                        // 「事前分析」关掉时 prefetch() 自己会直接返回。
+                        if (Vector.usable() && Vector.preEnabled()
+                                && Cat.endsWithPunct(cur)) {
+                            List<String> pendingSents = Cat.sentencesFor(cur);
+                            for (String s : pendingSents) {
+                                Vector.prefetch(s);
+                            }
+                        }
+
+                        // 这一轮就要定稿写回了 —— 先把向量结果收齐再算 want，
+                        // 顺序不能反，否则等到的结果用不上。
+                        // 从预取到现在已经过了稳定判定那几百毫秒，多半早算完；
+                        // 超时就用标签规则，绝不卡输入。
+                        if (Vector.usable() && Vector.preEnabled()
+                                && cur.equals(pending)
+                                && stable + 1 >= SETTLE_POLLS) {
+                            Vector.awaitAll(Cat.sentencesFor(cur), VEC_WAIT_MS);
                         }
 
                         String want = Cat.transform(cur);
