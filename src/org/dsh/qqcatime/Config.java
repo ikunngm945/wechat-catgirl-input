@@ -351,6 +351,8 @@ public final class Config {
         load();
         // 向量模型配置也一并还原（默认关闭，不保留用户填的 key/地址）
         Vector.restoreDefaults();
+        // LLM 改写同理
+        Llm.restoreDefaults();
         Cat.log("replace/settings 已恢复默认");
     }
 

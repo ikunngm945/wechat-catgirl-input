@@ -124,6 +124,7 @@ public final class Probe implements IXposedHookLoadPackage {
             Config.load();
             TagLib.load();
             Vector.load();
+            Llm.load();
             log("配置就绪：词库 " + Cat.kaomojiCount() + " 条，白名单 "
                     + Cat.whitelist().size() + " 个，标签 " + TagLib.tagCount()
                     + " 个，规则 " + TagLib.ruleCount() + " 条");
@@ -264,6 +265,7 @@ public final class Probe implements IXposedHookLoadPackage {
             Config.load();
             TagLib.load();
             Vector.load();
+            Llm.load();
 
             // 取全部文本（游标前后都要，因为语音上屏后光标位置不定）
             CharSequence beforeCs = ic.getTextBeforeCursor(2000, 0);
@@ -273,6 +275,24 @@ public final class Probe implements IXposedHookLoadPackage {
             String cur = before + after;
             if (cur.length() == 0) {
                 return;
+            }
+            // LLM 改写：打字路径可能还没等到结果，这里再等一小会儿。
+            // 拿到就用模型改写的正文；超时/失败自动回退本地规则，
+            // 绝不因为网络慢把消息卡住。
+            //
+            // (null hint) 语音上屏会先触发 finishComposingText，
+            // 这里再等一次能显著提高命中率。
+            if (Llm.enabled()) {
+                String raw = Cat.llmInput(cur);
+                if (Cat.hasContent(raw)) {
+                    long t0 = System.currentTimeMillis();
+                    String r = Llm.consult(raw, Llm.sendWaitMs());
+                    long cost = System.currentTimeMillis() - t0;
+                    if (cost >= 50 || r == null) {
+                        log("SEND_LLM 等了 " + cost + "ms，结果="
+                                + (r == null ? "回退本地规则" : "已拿到"));
+                    }
+                }
             }
             // 发送前兜底：语音输入与回车键发送都不走「打字轮询」那条路，
             // 也就没有事前预取。这里主动问一次向量模型并等一小会儿，
@@ -394,6 +414,7 @@ public final class Probe implements IXposedHookLoadPackage {
                             Config.load();
                             TagLib.load();
                             Vector.load();
+                            Llm.load();
                         }
 
                         EditorInfo ei = svc.getCurrentInputEditorInfo();
@@ -449,25 +470,50 @@ public final class Probe implements IXposedHookLoadPackage {
                             continue;
                         }
 
+                        // 事前改写：LLM 开着时，检测到句末标点就先请模型改写。
+                        // 打字中途不发请求，避免每个字符都联网。
+                        if (Llm.enabled() && Llm.preEnabled()
+                                && Cat.endsWithPunct(cur)) {
+                            String raw = Cat.llmInput(cur);
+                            if (Cat.hasContent(raw)) {
+                                Llm.prefetch(raw);
+                            }
+                        }
+
                         // 事前调用：只有这一种触发方式 —— 检测到用户刚打完
                         // 一个句末标点，才把这句丢给向量模型去比对。
                         // 打字中途不发请求，避免每个字符都联网。
                         // 「事前分析」关掉时 prefetch() 自己会直接返回。
+                        //
+                        // LLM 开着且结果还没回来时先跳过：要等的是「改写后的
+                        // 正文」，拿改写前的文字去问向量纯属浪费额度。
                         if (Vector.usable() && Vector.preEnabled()
-                                && Cat.endsWithPunct(cur)) {
+                                && Cat.endsWithPunct(cur) && Cat.llmSettled(cur)) {
                             List<String> pendingSents = Cat.sentencesFor(cur);
                             for (String s : pendingSents) {
                                 Vector.prefetch(s);
                             }
                         }
 
-                        // 这一轮就要定稿写回了 —— 先把向量结果收齐再算 want，
-                        // 顺序不能反，否则等到的结果用不上。
+                        // 这一轮就要定稿写回了 —— 先把 LLM 与向量结果收齐再算
+                        // want，顺序不能反，否则等到的结果用不上。
                         // 从预取到现在已经过了稳定判定那几百毫秒，多半早算完；
-                        // 超时就用标签规则，绝不卡输入。
-                        if (Vector.usable() && Vector.preEnabled()
-                                && cur.equals(pending)
-                                && stable + 1 >= SETTLE_POLLS) {
+                        // 超时就用本地规则，绝不卡输入。
+                        boolean settling = cur.equals(pending)
+                                && stable + 1 >= SETTLE_POLLS;
+                        if (settling && Llm.enabled() && Llm.preEnabled()) {
+                            String raw = Cat.llmInput(cur);
+                            if (Cat.hasContent(raw)) {
+                                long t0 = System.currentTimeMillis();
+                                String r = Llm.consult(raw, Llm.waitMs());
+                                long cost = System.currentTimeMillis() - t0;
+                                if (cost >= 100) {
+                                    log("LLM_CONSULT 等了 " + cost + "ms，结果="
+                                            + (r == null ? "回退本地规则" : "已拿到"));
+                                }
+                            }
+                        }
+                        if (settling && Vector.usable() && Vector.preEnabled()) {
                             Vector.awaitAll(Cat.sentencesFor(cur), VEC_WAIT_MS);
                         }
 

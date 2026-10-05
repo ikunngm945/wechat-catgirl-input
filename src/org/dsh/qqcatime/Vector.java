@@ -80,7 +80,8 @@ public final class Vector {
           + "# 领先间距：第一名要比第二名高出这么多才算「真的贴切」。\n"
           + "# 190 条颜文字描述彼此很像，光看绝对分分不出「真贴切」还是\n"
           + "# 「在一堆差不多的里随便挑了个」，这个值能把准确率从 79% 提到 93%。\n"
-          + "margin: 0.015\n";
+          + "margin: 0.015\n"
+          + "# 记忆库（memory.txt）的读写开关另有 memory.yaml，面板上单独一项。\n";
 
     /** Key 文件的初始内容（首次使用时释放）。 */
     private static final String KEY_TEMPLATE =
@@ -456,6 +457,7 @@ public final class Vector {
         Cat.writeFile(CFG_FILE, DEFAULT_CFG);
         cfgStamp = -2;
         writeKey("");
+        VecStore.saveEnabled(true);   // 记忆库开关一并恢复默认
         load();
         decisions.clear();
         vecCache.clear();

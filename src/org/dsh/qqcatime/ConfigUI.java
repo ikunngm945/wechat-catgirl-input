@@ -262,6 +262,9 @@ public final class ConfigUI {
         // ---- 向量模型 ----
         root.addView(buildVectorPanel(a, d));
 
+        // ---- LLM 改写 ----
+        root.addView(buildLlmPanel(a, d));
+
         // 词库信息
         Cat.loadKaomoji();
         Cat.loadWhitelist();
@@ -832,6 +835,368 @@ public final class ConfigUI {
     }
 
     /**
+     * LLM 改写设置区块。
+     *
+     * <p>开启后由大模型完成人称替换与句末后缀：「文字替换」「句末后缀」
+     * 两个开关不再机械套用，而是展开进提示词里交给模型。
+     * 改写完的正文再逐句匹配颜文字（开了向量就走向量，没开就直接按规则）。
+     */
+    static View buildLlmPanel(final Activity a, final float d) {
+        final LinearLayout box = new LinearLayout(a);
+        box.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(a);
+        title.setText("\nLLM 改写（提示词 + 用户请求）");
+        title.setTextSize(14);
+        title.setTextColor(Color.parseColor("#111111"));
+        box.addView(title);
+
+        final LinearLayout inner = new LinearLayout(a);
+        inner.setOrientation(LinearLayout.VERTICAL);
+        box.addView(inner);
+
+        final Runnable[] holder = new Runnable[1];
+        final Runnable refresh = new Runnable() {
+            @Override
+            public void run() {
+                inner.removeAllViews();
+                Llm.load();
+
+                inner.addView(buildSwitchRow(a, "启用 LLM 改写", Llm.enabled(),
+                        new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Llm.save(v, Llm.preEnabled(), Llm.url(), Llm.KEEP_KEY,
+                                        Llm.model(), Llm.temp());
+                                run();
+                            }
+                        }));
+
+                inner.addView(buildSwitchRow(a, "事前改写（打字时就用）",
+                        Llm.preEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Llm.save(Llm.enabled(), v, Llm.url(), Llm.KEEP_KEY,
+                                        Llm.model(), Llm.temp());
+                                run();
+                            }
+                        }));
+
+                inner.addView(buildSwitchRow(a, "结果缓存（llm_cache.txt）",
+                        Llm.cacheEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Llm.save(Llm.enabled(), Llm.preEnabled(), v,
+                                        Llm.url(), Llm.KEEP_KEY, Llm.model(),
+                                        Llm.temp());
+                                run();
+                            }
+                        }));
+
+                TextView tip = new TextView(a);
+                tip.setTextSize(11);
+                tip.setTextColor(Color.parseColor("#888888"));
+                tip.setText(Llm.enabled()
+                        ? "已开启：上面的「文字替换」「句末后缀」转为提示词交给模型，"
+                          + "本地不再机械套用。改写完的正文再逐句匹配颜文字。"
+                        : "开启后由模型改写整段话；未开启时用本地规则（当前行为不变）。");
+                inner.addView(tip);
+
+                inner.addView(field(a, d, "接口地址", Llm.url(),
+                        "https://api.siliconflow.cn/v1", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                Llm.save(Llm.enabled(), Llm.preEnabled(), v,
+                                        Llm.KEEP_KEY, Llm.model(), Llm.temp());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "API Key", "",
+                        Llm.hasKey() ? "已配置（留空保持不变）"
+                                     : "sk-... 填入后不再回显", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                Llm.save(Llm.enabled(), Llm.preEnabled(), Llm.url(),
+                                        v.length() == 0 ? Llm.KEEP_KEY : v,
+                                        Llm.model(), Llm.temp());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "模型名", Llm.model(),
+                        "Qwen/Qwen2.5-7B-Instruct", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                Llm.save(Llm.enabled(), Llm.preEnabled(), Llm.url(),
+                                        Llm.KEEP_KEY, v, Llm.temp());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "温度", String.valueOf(Llm.temp()),
+                        "0.8（越小越稳定）", new Saver() {
+                            @Override
+                            public void save(String v) {
+                                float tp = Llm.temp();
+                                try {
+                                    tp = Float.parseFloat(v.trim());
+                                } catch (Throwable t) {
+                                    // 保持原值
+                                }
+                                Llm.save(Llm.enabled(), Llm.preEnabled(), Llm.url(),
+                                        Llm.KEEP_KEY, Llm.model(), tp);
+                            }
+                        }));
+
+                inner.addView(field(a, d, "最大输出",
+                        String.valueOf(Llm.maxTokens()), "512（token，1 汉字≈1）",
+                        new Saver() {
+                            @Override
+                            public void save(String v) {
+                                int mx = Llm.maxTokens();
+                                try {
+                                    mx = Integer.parseInt(v.trim());
+                                } catch (Throwable t) {
+                                    // 保持原值
+                                }
+                                Llm.save(Llm.enabled(), Llm.preEnabled(),
+                                        Llm.cacheEnabled(), Llm.url(), Llm.KEEP_KEY,
+                                        Llm.model(), Llm.temp(), mx,
+                                        Llm.maxInput(), Llm.level());
+                            }
+                        }));
+
+                inner.addView(field(a, d, "最大输入",
+                        String.valueOf(Llm.maxInput()), "200（字符，0 = 不限制）",
+                        new Saver() {
+                            @Override
+                            public void save(String v) {
+                                int mi = Llm.maxInput();
+                                try {
+                                    mi = Integer.parseInt(v.trim());
+                                } catch (Throwable t) {
+                                    // 保持原值
+                                }
+                                Llm.save(Llm.enabled(), Llm.preEnabled(),
+                                        Llm.cacheEnabled(), Llm.url(), Llm.KEEP_KEY,
+                                        Llm.model(), Llm.temp(), Llm.maxTokens(),
+                                        mi, Llm.level());
+                            }
+                        }));
+
+                inner.addView(choiceRow(a, d, "思考等级", Llm.LEVEL_NAMES,
+                        Llm.level(), new Chooser() {
+                            @Override
+                            public void onPick(int index) {
+                                Llm.save(Llm.enabled(), Llm.preEnabled(),
+                                        Llm.cacheEnabled(), Llm.url(), Llm.KEEP_KEY,
+                                        Llm.model(), Llm.temp(), Llm.maxTokens(),
+                                        Llm.maxInput(), index);
+                            }
+                        }));
+                inner.addView(note(a, d, Llm.LEVEL_HINT));
+
+                inner.addView(field(a, d, "等待",
+                        String.valueOf(Llm.waitMs()), "2500（毫秒，200 ~ 15000）",
+                        new Saver() {
+                            @Override
+                            public void save(String v) {
+                                long wt = Llm.waitMs();
+                                try {
+                                    wt = Long.parseLong(v.trim());
+                                } catch (Throwable t) {
+                                    // 保持原值
+                                }
+                                Llm.save(Llm.enabled(), Llm.preEnabled(),
+                                        Llm.cacheEnabled(), Llm.url(), Llm.KEEP_KEY,
+                                        Llm.model(), Llm.temp(), Llm.maxTokens(),
+                                        Llm.maxInput(), Llm.level(), wt);
+                            }
+                        }));
+                inner.addView(note(a, d, "打字时最多等模型多久；超时先用本地规则。"
+                        + "发送前兜底最多等 " + (Llm.SEND_CAP_MS / 1000) + " 秒。"));
+
+                // 提示词编辑
+                TextView pLab = new TextView(a);
+                pLab.setTextSize(12);
+                pLab.setTextColor(Color.parseColor("#111111"));
+                pLab.setText("\n提示词（改完点「保存提示词」立刻生效）\n"
+                        + "占位符：{替换规则} 会自动展开成文字替换清单，"
+                        + "{句末后缀} 展开成后缀文字。");
+                inner.addView(pLab);
+
+                final EditText pInput = new EditText(a);
+                pInput.setTextSize(11);
+                pInput.setGravity(Gravity.TOP | Gravity.START);
+                pInput.setMinLines(6);
+                pInput.setMaxLines(14);
+                pInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                        | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                pInput.setText(Llm.prompt());
+                pInput.setLayoutParams(new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                inner.addView(pInput);
+
+                LinearLayout pBtn = new LinearLayout(a);
+                pBtn.setOrientation(LinearLayout.HORIZONTAL);
+                Button pSave = new Button(a);
+                pSave.setText("保存提示词");
+                pSave.setTextSize(11);
+                pSave.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        boolean ok = Llm.savePrompt(pInput.getText().toString());
+                        toast(a, ok ? "提示词已保存" : "提示词不能为空");
+                        run();
+                    }
+                });
+                pBtn.addView(pSave);
+
+                Button pReset = new Button(a);
+                pReset.setText("恢复默认提示词");
+                pReset.setTextSize(11);
+                pReset.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        new android.app.AlertDialog.Builder(a)
+                                .setTitle("恢复默认提示词")
+                                .setMessage("会覆盖当前编辑框里的内容，确定吗？")
+                                .setPositiveButton("恢复", new android.content.DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(android.content.DialogInterface di, int w) {
+                                        Llm.savePrompt(Llm.DEFAULT_PROMPT);
+                                        toast(a, "已恢复默认提示词");
+                                        run();
+                                    }
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    }
+                });
+                pBtn.addView(pReset);
+                inner.addView(pBtn);
+
+                // 操作按钮
+                LinearLayout btns = new LinearLayout(a);
+                btns.setOrientation(LinearLayout.HORIZONTAL);
+                btns.setPadding(0, (int) (4 * d), 0, (int) (4 * d));
+
+                Button test = new Button(a);
+                test.setText("测试连接");
+                test.setTextSize(11);
+                test.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        toast(a, "正在测试…");
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                final String r = Llm.test("我喜欢你。");
+                                a.runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        toast(a, r);
+                                        if (holder[0] != null) {
+                                            holder[0].run();
+                                        }
+                                    }
+                                });
+                            }
+                        }, "qqcat-llm-test").start();
+                    }
+                });
+                btns.addView(test);
+
+                Button clrKey = new Button(a);
+                clrKey.setText("清除 Key");
+                clrKey.setTextSize(11);
+                clrKey.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        new android.app.AlertDialog.Builder(a)
+                                .setTitle("清除 LLM API Key")
+                                .setMessage("确定要删除已保存的 API Key 吗？"
+                                        + "删除后需要重新填写才能使用 LLM 改写。")
+                                .setPositiveButton("清除", new android.content.DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(android.content.DialogInterface di, int w) {
+                                        Llm.clearKey();
+                                        toast(a, "Key 已清除");
+                                        run();
+                                    }
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    }
+                });
+                btns.addView(clrKey);
+
+                Button clrCache = new Button(a);
+                clrCache.setText("清空结果缓存");
+                clrCache.setTextSize(11);
+                clrCache.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        new android.app.AlertDialog.Builder(a)
+                                .setTitle("清空结果缓存")
+                                .setMessage("确定要删除 llm_cache.txt 里记录的全部"
+                                        + "「输入→输出」吗？删除后同样的句子"
+                                        + "会重新请求模型。")
+                                .setPositiveButton("清空", new android.content.DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(android.content.DialogInterface di, int w) {
+                                        Llm.clearCache();
+                                        toast(a, "结果缓存已清空");
+                                        run();
+                                    }
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    }
+                });
+                btns.addView(clrCache);
+                inner.addView(btns);
+
+                TextView stat = new TextView(a);
+                stat.setTextSize(11);
+                stat.setTextColor(Color.parseColor("#666666"));
+                stat.setText("状态：" + Llm.lastStatus()
+                        + "\n接口：" + Llm.endpoint()
+                        + "\nKey：" + (Llm.hasKey() ? "已配置（不回显）" : "未配置")
+                        + "\n结果缓存：" + (Llm.cacheEnabled() ? "开" : "关")
+                        + "，已缓存 " + Llm.cacheCount() + " 条"
+                        + "\n配置文件：" + Llm.CFG_FILE
+                        + "\nKey 文件：" + Llm.KEY_FILE
+                        + "\n提示词文件：" + Llm.PROMPT_FILE
+                        + "\n缓存文件：" + Llm.CACHE_FILE);
+                stat.setTextIsSelectable(true);
+                inner.addView(stat);
+
+                TextView hint = new TextView(a);
+                hint.setTextSize(11);
+                hint.setTextColor(Color.parseColor("#666666"));
+                hint.setText(
+                    "\n工作方式：\n"
+                  + "  1. 用户打完一句带句末标点的话 → 先查结果缓存（llm_cache.txt）。\n"
+                  + "     命中就直接用，不再请求模型；没命中才发给 LLM。\n"
+                  + "  2. 提示词里带着「{替换规则}」与「{句末后缀}」展开后的要求，\n"
+                  + "     模型据此完成人称替换与句末后缀，输出改写后的整段正文。\n"
+                  + "  3. 改写后的正文再逐句匹配颜文字：\n"
+                  + "     开了向量 → 走向量检索（记忆库 → 向量 → 关键词 → 随机）；\n"
+                  + "     没开向量 → 直接按记忆库与关键词规则匹配。\n"
+                  + "  · 「结果缓存」开关关掉后：既不读 llm_cache.txt，也不再往里写。\n"
+                  + "  · 模型没回来 / 请求失败 → 自动回退本地规则改写，消息不会白发。\n"
+                  + "  · 本地规则回退时「句末后缀」照常生效，不会重复加喵。\n"
+                  + "  · 模型输出明显离谱（比原文长三倍以上）会被丢弃，走本地规则。\n"
+                );
+                inner.addView(hint);
+            }
+        };
+        holder[0] = refresh;
+        refresh.run();
+        return box;
+    }
+
+    /**
      * 向量模型设置区块。
      *
      * 填 接口地址 / API Key / 模型名，维度可留 auto 自动识别；
@@ -878,6 +1243,16 @@ public final class ConfigUI {
                                 Vector.save(Vector.enabled(), v, Vector.url(),
                                         Vector.KEEP_KEY, Vector.model(),
                                         Vector.dimText(), Vector.minScore());
+                                run();
+                            }
+                        }));
+
+                inner.addView(buildSwitchRow(a, "记忆库（memory.txt）读写",
+                        VecStore.enabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                VecStore.saveEnabled(v);
+                                Vector.resetCache();
                                 run();
                             }
                         }));
@@ -1095,6 +1470,7 @@ public final class ConfigUI {
                 String stale = Vector.indexStale();
                 stat.setText("状态：" + Vector.lastStatus()
                         + "\n记忆库：" + VecStore.count() + " 条"
+                        + "（" + (VecStore.enabled() ? "读写开" : "读写关") + "）"
                         + "\n颜文字索引：" + KaoIndex.describe()
                         + (Vector.rebuilding() ? "（正在重建…）"
                            : (stale != null ? "　⚠ " + stale + "，需重建" : "　✓ 最新"))
@@ -1161,6 +1537,64 @@ public final class ConfigUI {
     /** 一行「标签 + 输入框 + 保存按钮」。 */
     private interface Saver {
         void save(String value);
+    }
+
+    /** 下拉选择回调。 */
+    private interface Chooser {
+        void onPick(int index);
+    }
+
+    /** 构造一行「标题 + 下拉框」。 */
+    private static View choiceRow(Activity a, float d, String label,
+                                  String[] items, int sel,
+                                  final Chooser h) {
+        LinearLayout row = new LinearLayout(a);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, (int) (3 * d), 0, (int) (3 * d));
+
+        TextView lab = new TextView(a);
+        lab.setText(label + "：");
+        lab.setTextSize(12);
+        lab.setMinWidth((int) (72 * d));
+        row.addView(lab);
+
+        android.widget.Spinner sp = new android.widget.Spinner(a);
+        android.widget.ArrayAdapter<String> ad =
+                new android.widget.ArrayAdapter<String>(a,
+                        android.R.layout.simple_spinner_item, items);
+        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sp.setAdapter(ad);
+        if (sel >= 0 && sel < items.length) {
+            sp.setSelection(sel);
+        }
+        sp.setOnItemSelectedListener(
+                new android.widget.AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(android.widget.AdapterView<?> p,
+                                               View v, int pos, long id) {
+                        h.onPick(pos);
+                    }
+
+                    @Override
+                    public void onNothingSelected(android.widget.AdapterView<?> p) {
+                        // 忽略
+                    }
+                });
+        sp.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(sp);
+        return row;
+    }
+
+    /** 小号灰色说明文字。 */
+    private static TextView note(Activity a, float d, CharSequence text) {
+        TextView tv = new TextView(a);
+        tv.setTextSize(11);
+        tv.setTextColor(Color.parseColor("#888888"));
+        tv.setPadding(0, 0, 0, (int) (4 * d));
+        tv.setText(text);
+        return tv;
     }
 
     private static View field(final Activity a, float d, String label,

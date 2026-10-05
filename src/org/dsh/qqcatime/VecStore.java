@@ -43,6 +43,17 @@ public final class VecStore {
     /** v6.x 的旧文件（句子[TAB]颜文字[TAB]向量），仅用于一次性搬迁。 */
     private static final String OLD_FILE = Cat.DIR + "/vector.txt";
 
+    /** 记忆库自身的开关配置文件。 */
+    public static final String CFG_FILE = Cat.DIR + "/memory.yaml";
+
+    /** 记忆库开关的默认配置。 */
+    public static final String DEFAULT_CFG =
+            "# 记忆库（memory.txt）开关。\n"
+          + "# on  = 正常读写：先拿句子来「完全相同」比对，命中直接用；\n"
+          + "#       向量 / 事后分析算出的结果也写进来，越用越准。\n"
+          + "# off = 完全不读也不写：memory.txt 保持原样，检索直接走向量 / 关键词。\n"
+          + "mem: on\n";
+
     /** 条目上限，超过后自动丢弃最旧的（TXT 是有序的，新的在后面）。 */
     public static final int MAX_ENTRIES = 20000;
 
@@ -60,13 +71,102 @@ public final class VecStore {
 
     private static long stamp = -2;
 
+    /** 记忆库开关；配置有变化才读盘。 */
+    private static volatile boolean enabled = true;
+    private static long cfgStamp = -2;
+
     private VecStore() {
+    }
+
+    // ------------------------------------------------------------ 开关
+
+    /** 记忆库是否启用（关掉后既不读也不写 memory.txt）。 */
+    public static boolean enabled() {
+        return enabled;
+    }
+
+    /** 有变化才读 memory.yaml。 */
+    public static synchronized void loadConfig() {
+        File f = new File(CFG_FILE);
+        long s = f.exists() ? (f.lastModified() * 1000L + f.length()) : -1L;
+        if (s == cfgStamp) {
+            return;
+        }
+        cfgStamp = s;
+        if (s == -1L || f.length() == 0) {
+            Cat.writeFile(CFG_FILE, DEFAULT_CFG);
+            cfgStamp = f.exists() ? (f.lastModified() * 1000L + f.length()) : -2L;
+            setEnabled(true);
+            Cat.log("memory: 开关已释放默认（on）");
+            return;
+        }
+        boolean en = true;
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new InputStreamReader(
+                    new FileInputStream(f), "UTF-8"));
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.length() == 0 || line.startsWith("#")) {
+                    continue;
+                }
+                int sep = line.indexOf(':');
+                if (sep < 0) {
+                    sep = line.indexOf('=');
+                }
+                if (sep <= 0) {
+                    continue;
+                }
+                String kk = line.substring(0, sep).trim().toLowerCase();
+                String vv = line.substring(sep + 1).trim().toLowerCase();
+                if ("mem".equals(kk) || "memory".equals(kk) || "on".equals(kk)
+                        || "enable".equals(kk) || "enabled".equals(kk)) {
+                    en = "on".equals(vv) || "1".equals(vv) || "true".equals(vv)
+                            || "yes".equals(vv) || "开".equals(vv) || "启用".equals(vv);
+                }
+            }
+        } catch (Throwable t) {
+            // 用默认值
+        } finally {
+            if (br != null) {
+                try { br.close(); } catch (Throwable t) { }
+            }
+        }
+        setEnabled(en);
+        Cat.log("memory: 开关=" + en + "（" + (en ? "正常读写" : "不读不写")
+                + "，文件 " + exact.size() + " 条）");
+    }
+
+    private static void setEnabled(boolean en) {
+        enabled = en;
+        if (!en) {
+            // 关掉时把内存里的条目丢掉，保障「不读取」
+            exact.clear();
+        } else {
+            stamp = -2;   // 重新开时强制读一次盘
+        }
+    }
+
+    /** 保存开关（界面调用）。 */
+    public static synchronized boolean saveEnabled(boolean en) {
+        Cat.writeFile(CFG_FILE, "# 记忆库（memory.txt）开关。\n"
+                + "# on  = 正常读写；off = 不读也不写。\n"
+                + "mem: " + (en ? "on" : "off") + "\n");
+        cfgStamp = -2;
+        setEnabled(en);
+        loadConfig();
+        return true;
     }
 
     // ------------------------------------------------------------ 加载
 
     /** 有变化才重新读盘。 */
     public static synchronized void load() {
+        loadConfig();
+        if (!enabled) {
+            return;   // 开关关掉：不读也不写
+        }
         File f = new File(FILE);
         long s = f.exists() ? (f.lastModified() * 1000L + f.length()) : -1L;
         if (s == stamp) {
@@ -254,6 +354,9 @@ public final class VecStore {
      * 所以不再需要单独的标点变体。
      */
     public static synchronized String exact(String sentence) {
+        if (!enabled) {
+            return null;   // 开关关掉：不读记忆库
+        }
         if (sentence == null || sentence.length() == 0) {
             return null;
         }
@@ -326,6 +429,9 @@ public final class VecStore {
      * 这样「我喜欢你。」与「我喜欢你」只占一条；？与！ 保留，各存各的。
      */
     public static synchronized boolean remember(String sentence, String kaomoji) {
+        if (!enabled) {
+            return false;   // 开关关掉：不写记忆库
+        }
         if (sentence == null || sentence.length() == 0
                 || kaomoji == null || kaomoji.length() == 0) {
             return false;

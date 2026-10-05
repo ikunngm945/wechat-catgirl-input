@@ -719,17 +719,106 @@ public final class Cat {
             return input;
         }
         String stripped = stripKaomoji(input);
-        // 没有任何「未喵化的标点」=> 保持原样，不打扰正常打字
-        if (!needsMiao(stripped)) {
+        String base = llmInput(input);
+        if (base.length() == 0) {
+            return input;   // 已经是模型输出，链条到此为止
+        }
+        String core = coreText(input);
+        if (core.length() == 0) {
             return input;
         }
-        // 加喵统一交给 withKaomojiPerSentence 逐句处理，这里不再重复加
-        String core = Config.applyReplace(stripSentenceMiao(stripped));
-        return withKaomojiPerSentence(core);
+        boolean llmApplied = Llm.enabled() && Llm.rewrite(base) != null;
+        if (!llmApplied) {
+            // 没有任何「未喵化的标点」=> 保持原样，不打扰正常打字
+            if (!needsMiao(stripped)) {
+                return input;
+            }
+            return withKaomojiPerSentence(core, false);
+        }
+        // LLM 已改写：正文就是模型输出，句末后缀已由模型加过，
+        // 所以不再看 needsMiao（那里的「喵」判定对模型输出不适用）。
+        // 稳定判据：去掉末尾颜文字后的正文已经等于模型输出 -> 不用再动，
+        // 否则每一轮都会重新随机挑一次颜文字。
+        if (endsWithKaomoji(input) && stripped.equals(core)) {
+            return input;
+        }
+        // 把「改写后的正文」登记成它自己的结果：写回后轮询会再读一遍，
+        // 不登记就会每轮重新请求模型。
+        Llm.noteIdentity(core);
+        return withKaomojiPerSentence(core, true);
     }
 
     /**
-     * 宽松转换：供「语音输入自动发送」使用。
+     * LLM 的输入文本：去掉颜文字，必要时去掉句末原有的「喵」。
+     *
+     * <p>两种模式差别很大：
+     * <ul>
+     *   <li><b>开了 LLM</b>：正文由模型产出，「喵」是模型自己加的，
+     *       所以这里<b>不能</b>剥掉它 —— 只去掉末尾颜文字。另外，
+     *       如果这段文字本身就是模型改写过的结果（写回后轮询又读到），
+     *       返回空串表示「到此为止，别再加工」。</li>
+     *   <li><b>没开 LLM</b>：沿用本地规则，先剥掉句末原有的「喵」，
+     *       保证结果与历史无关。</li>
+     * </ul>
+     */
+    public static String llmInput(String input) {
+        if (input == null) {
+            return "";
+        }
+        String s = stripKaomoji(input);
+        if (Llm.enabled()) {
+            return Llm.isOutput(s) ? "" : s;
+        }
+        return stripSentenceMiao(s);
+    }
+
+    /**
+     * 取「用于挑颜文字的正文」。
+     *
+     * <p>三条路径：
+     * <ol>
+     *   <li>LLM 改写开着，并且这句已经有模型结果 → 直接用模型输出的正文
+     *       （人称替换与句末后缀都由模型做了，本地不再套用）；</li>
+     *   <li>LLM 改写开着但结果还没回来 / 请求失败 → 回落本地规则
+     *       （仍然做人称替换与句末后缀），保证消息不会白发；</li>
+     *   <li>LLM 改写关着 → 本地规则，行为与以前完全一致。</li>
+     * </ol>
+     */
+    public static String coreText(String input) {
+        String base = llmInput(input);
+        if (base.length() == 0) {
+            return "";
+        }
+        if (Llm.enabled()) {
+            String r = Llm.rewrite(base);
+            if (r != null && r.length() > 0) {
+                return r;
+            }
+            // 回退本地规则：人称替换 + 去句末原有的喵
+            return Config.applyReplace(stripSentenceMiao(base));
+        }
+        return Config.applyReplace(base);
+    }
+
+    /**
+     * 这句的 LLM 改写是否「已经落定」—— 要么拿到了结果，要么确定失败。
+     *
+     * <p>还没落定时不要拿改写前的文字去问向量：那句话随后会被模型改写，
+     * 匹配到的颜文字对不上改写后的内容，纯属浪费额度。
+     */
+    public static boolean llmSettled(String input) {
+        if (!Llm.enabled() || !Llm.preEnabled()) {
+            return true;
+        }
+        String raw = llmInput(input);
+        if (!hasContent(raw)) {
+            return true;
+        }
+        return Llm.rewrite(raw) != null || Llm.failedFor(raw);
+    }
+
+    /**
+     * 宽宽松转换：供「语音输入自动发送」使用。
      *
      * 语音识别结果常常不带句末标点（尤其短句，如「你好 你好」），
      * 若沿用 transform() 的「无标点不动」规则，语音消息就永远不会被喵化。
@@ -742,14 +831,26 @@ public final class Cat {
             return input;
         }
         String stripped = stripKaomoji(input);
-        String core = Config.applyReplace(stripSentenceMiao(stripped));
+        String base = llmInput(input);
+        if (base.length() == 0) {
+            return input;   // 已经是模型输出，链条到此为止
+        }
+        String core = coreText(input);
+        if (core.length() == 0) {
+            return input;
+        }
+        boolean llmApplied = Llm.enabled() && Llm.rewrite(base) != null;
 
-        // 确实没有任何改动，且末尾已是颜文字 -> 保持原样
-        if (core.equals(stripped) && endsWithKaomoji(input)) {
+        // 稳定判据：正文已经落定，且末尾已有颜文字 -> 保持原样，别反复改写
+        if (endsWithKaomoji(input) && (llmApplied ? stripped.equals(core)
+                                                  : core.equals(stripped))) {
             return input;
         }
         // 加喵与选颜文字都放到「逐句」里做，保证没标点的句子也能补上喵
-        return withKaomojiPerSentence(core);
+        if (llmApplied) {
+            Llm.noteIdentity(core);
+        }
+        return withKaomojiPerSentence(core, llmApplied);
     }
 
     /**
@@ -872,14 +973,21 @@ public final class Cat {
         if (input == null || input.length() == 0) {
             return none;
         }
-        String stripped = stripKaomoji(input);
-        String core = Config.applyReplace(stripSentenceMiao(stripped));
+        String core = coreText(input);
         return splitSentences(core);
     }
 
     private static String withKaomojiPerSentence(String core) {
+        return withKaomojiPerSentence(core, false);
+    }
+
+    /**
+     * @param llmApplied 正文是否来自模型改写。是的话句末后缀已由模型处理，
+     *                   本地不再补，避免出现「主人好喵喵。」。
+     */
+    private static String withKaomojiPerSentence(String core, boolean llmApplied) {
         TagLib.load();
-        String suf = Config.suffixEnabled() ? Config.suffix() : "";
+        String suf = (!llmApplied && Config.suffixEnabled()) ? Config.suffix() : "";
         boolean kaoOn = Config.kaomojiEnabled();
         StringBuilder sb = new StringBuilder();
         List<String> sents = splitSentences(core);
