@@ -27,9 +27,14 @@ WRITE host=com.tencent.mm ok=true from=[我爱你。] to=[本喵爱主人喵。=
 
 ### 1. 安装模块
 
+从 [Releases](https://github.com/ikunngm945/wechat-catgirl-input-xposed/releases/latest)
+下载最新 APK，或直接用已构建好的包：
+
 ```sh
-pm install -r QQCatIME-7.12.apk
+pm install -r wechat-catgirl-input-v7.12.apk
 ```
+
+SHA-256 `7dbd3e4c44f7c1c4e7493041dfb206ecb1f9fe6fabe5f5721bc8e19b20e99dba`
 
 ### 2. 在 LSPosed 里启用（必须手动，无法脚本化）
 

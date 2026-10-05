@@ -340,11 +340,23 @@ hook 输入法进程读写输入框（微信场景唯一可行方案，见 READM
 ## 待办
 
 - [x] 用户确认 v7.12 短句改写正常（User said m07005「OK，没问题了」）
-- [x] 推 GitHub：`main` = `c83bab8`，tag `v7.12` =
+- [x] 推 GitHub：`main` = `ff42bf9`，tag `v7.12` =
       `c83bab80cf0e12480bd81371a2279b8f744b4978`（仓库
       `ikunngm945/wechat-catgirl-input-xposed`），预编译 APK 放
       `releases/wechat-catgirl-input-v7.12.apk`（119251 字节，
       md5 `e7dd0ff3b5ac52d776b3000d513dc4de`）
+- [x] GitHub **Release** v7.12 已建（User said m07082「你好像没有推送APK」——
+      此前只把 APK 放进仓库目录，没建 Release，所以 Releases 页看不到）。
+      Release id `403582451`，asset id `612190769`，附件
+      `wechat-catgirl-input-v7.12.apk`（119251 字节）。
+      下载链接
+      `https://github.com/ikunngm945/wechat-catgirl-input-xposed/releases/download/v7.12/wechat-catgirl-input-v7.12.apk`
+      —— 已 `curl -L` 回下并比对 SHA-256 一致
+      （`7dbd3e4c44f7c1c4e7493041dfb206ecb1f9fe6fabe5f5721bc8e19b20e99dba`）。
+      ⚠ **踩坑记录**：`.git-credentials` 的 `https://<user>:<token>@github.com`
+      里 **token 带冒号**，`sed` 的 `([^@]+)` 抠出来的是 `user:token`，
+      直接当 `Authorization: Bearer` 用会 401 `Bad credentials`；
+      必须再 `${T#*:}` 砍掉 `<user>:` 前缀。`git push` 不受影响（git 自己会拆）。
 - [ ] 后续端到端回归（未逐项实测）：最大输入超限回退 / 最大输出防截断 /
       思考等级（括号里就是实际下发值）/ 打标点走 LLM 改写 / 发送前兜底 /
       `llm_cache.txt` 第二次命中不再请求模型 / 关掉两个开关后确实不读不写
