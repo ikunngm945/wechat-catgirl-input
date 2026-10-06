@@ -323,6 +323,11 @@ public final class Probe implements IXposedHookLoadPackage {
             boolean ok = ic.commitText(want, 1);
             log("SEND_TRANSFORM host=" + host + " ok=" + ok
                     + " from=[" + cur + "] to=[" + want + "]");
+            // 结果已经交付到输入框：缓存关着的话，此刻丢掉内存暂存，
+            // 保证「关了缓存 = 不读也不写」，下次同句仍会重新问模型
+            if (ok) {
+                Llm.dropIfCacheOff();
+            }
         } catch (Throwable t) {
             log("SEND_TRANSFORM_ERR " + t.getClass().getSimpleName());
         } finally {
@@ -528,6 +533,11 @@ public final class Probe implements IXposedHookLoadPackage {
                                 boolean ok = writeBack(ic, cur, want);
                                 log("WRITE host=" + host + " ok=" + ok
                                         + " from=[" + cur + "] to=[" + want + "]");
+                                // 结果已经交付到输入框了：缓存关着的话，
+                                // 此刻把内存暂存丢掉，下次再打同一句会重新问模型
+                                if (ok) {
+                                    Llm.dropIfCacheOff();
+                                }
                                 lastSeen = ok ? want : cur;
                                 pending = null;
                                 stable = 0;

@@ -31,7 +31,7 @@ WRITE host=com.tencent.mm ok=true from=[我爱你。] to=[本喵爱主人喵。=
 下载最新 APK，或直接用已构建好的包：
 
 ```sh
-pm install -r wechat-catgirl-input-v7.12.apk
+pm install -r wechat-catgirl-input-v7.13.apk
 ```
 
 SHA-256 `7dbd3e4c44f7c1c4e7493041dfb206ecb1f9fe6fabe5f5721bc8e19b20e99dba`
@@ -303,6 +303,13 @@ v6.x 的 `vector.txt`（`句子\t颜文字\t向量`）会在首次启动时自�
   不许塞进词内部（`多少钱` 不能变 `多少喵钱`）；
   ③ 别丢字（`这个多少钱？` 不能改成 `这个要多少喵？`）；
   ④ **任何情况下都要输出内容**，不许返回空白。
+- **v7.13 起**：提示词开头即声明「你的唯一工作是**改写**用户发来的话，
+  不是和用户对话」「**绝对不要回复内容**」，并给出**正反例**
+  （输入「我喜欢你」→ 允许「本喵也超喜欢主人呀…」这类**对台词的改写**，
+  **绝不允许**「谢谢你」「我也喜欢你」这类**针对用户的回应**）；
+  规则末尾再自查一遍「你的输出是不是**在回答**用户？如果是，重写成
+  只是把台词改成猫娘口吻的版本」。修掉了模型偶尔**回复用户**而不是
+  **改写这句话**的毛病（`你是谁？` 旧版输出「本喵是谁呀～…」= 在回答）。
 - 想要更保守的「贴着原句改」风格，把仓库里的
   [`config/prompt_conservative.txt`](config/prompt_conservative.txt) 覆盖到设备
   `/data/user/0/com.tencent.wetype/qqime/prompt.txt` 即可（激进的默认版是
@@ -315,7 +322,7 @@ v6.x 的 `vector.txt`（`句子\t颜文字\t向量`）会在首次启动时自�
 |---|---|
 | `llm.yaml` | `llm` / `pre` / `cache` / `url` / `model` / `temp` / `max` / `max_input` / `think` / `wait` |
 | `llm_secret.yaml` | API Key（0600，**只写不可读**） |
-| `prompt.txt` | 可编辑提示词，内置 962 字默认值（激进风格） |
+| `prompt.txt` | 可编辑提示词，内置 1335 字默认值（激进风格） |
 | `llm_cache.txt` | 结果缓存，`输入<TAB>输出` 一行一条 |
 
 ### 最大输入 / 最大输出 / 思考等级 / 等待（v7.11+）
