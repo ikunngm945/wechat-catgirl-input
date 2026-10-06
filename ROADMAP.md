@@ -405,9 +405,17 @@ hook 输入法进程读写输入框（微信场景唯一可行方案，见 READM
       里 **token 带冒号**，`sed` 的 `([^@]+)` 抠出来的是 `user:token`，
       直接当 `Authorization: Bearer` 用会 401 `Bad credentials`；
       必须再 `${T#*:}` 砍掉 `<user>:` 前缀。`git push` 不受影响（git 自己会拆）。
-- [ ] 端到端实测 v7.13：提示词不再「回复用户」（`你是谁？` 这类）/ 关掉
-      「结果缓存」后同句**不再**命中、日志无 `LLM 缓存命中` / 最大输入超限回退 /
-      最大输出防截断 / 思考等级 / 打标点走 LLM 改写 / 发送前兜底 /
+- [x] 用户确认 v7.13 两个 bug 都好了（User said m07469「可以 没问题」）
+- [x] 推 GitHub：`main` = `a72b75142ed8bbf71759929901525b07d5277e72`，
+      tag `v7.13` 同 commit；仓库 `ikunngm945/wechat-catgirl-input-xposed`
+- [x] GitHub **Release** v7.13 已建：release id `404288181`，asset id `614385246`，
+      附件 `wechat-catgirl-input-v7.13.apk`（119251 字节，
+      digest `sha256:eec2bd4b179098232bd48f4d7e9ad1d9ee4fa44a358d607ee5a231f325e44dbd`），
+      下载链接
+      `https://github.com/ikunngm945/wechat-catgirl-input-xposed/releases/download/v7.13/wechat-catgirl-input-v7.13.apk`
+      —— 已 `curl -L` 回下并比对 SHA-256 一致
+- [ ] 后续端到端回归（未逐项实测）：最大输入超限回退 / 最大输出防截断 /
+      思考等级（括号里就是实际下发值）/ 打标点走 LLM 改写 / 发送前兜底 /
       `llm_cache.txt` 第二次命中不再请求模型 / 关掉两个开关后确实不读不写
 - [x] v7.12 的 `cleanup` 误判与「等待」项已修（v7.12 → 用户确认 m07005）
 
