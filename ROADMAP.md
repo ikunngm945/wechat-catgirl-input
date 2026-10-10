@@ -523,7 +523,15 @@ hook 输入法进程读写输入框（微信场景唯一可行方案，见 READM
 
 ## 待办
 
-- [ ] 端到端实测 v7.15：宿主吃掉行尾零宽后旧段不再重送模型（已真机验证）/
+- [x] 用户确认 v7.15（User said m08859「用着没问题，你直接推送」）
+- [x] 推 GitHub：`main` = `e13d03f`（v7.15 代码），tag `v7.15` 同 commit
+- [x] GitHub **Release** v7.15 已建：release id `409009436`，asset id `628213775`，
+      附件 `wechat-catgirl-input-v7.15.apk`（123347 字节，
+      digest `sha256:2a4fd0d1625da5dd7db76ecd92e0c8f867b5af41261aef6561a819d2eeb529bd`），
+      下载链接
+      `https://github.com/ikunngm945/wechat-catgirl-input-xposed/releases/download/v7.15/wechat-catgirl-input-v7.15.apk`
+      —— 已 `curl -L` 回下并比对 SHA-256 一致
+- [ ] 端到端实测 v7.15：宿主吃掉行尾零宽后旧段不再重送模型（已真机验证 ✅）/
       总开关关掉后完全不改字 / 改写完退格一个字再打字 / 打标点走 LLM /
       发送前兜底 / `llm_cache.txt` 第二次命中不再请求模型
 - [ ] 端到端实测 v7.14（User said m07505）：总开关关掉后完全不改字 /
