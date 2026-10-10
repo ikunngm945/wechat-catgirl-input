@@ -88,7 +88,7 @@
 
 # 二、安装与使用
 
-从 [Releases](https://github.com/ikunngm945/wechat-catgirl-input-xposed/releases/latest)
+从 [Releases](https://github.com/ikunngm945/wetype-catgirl-xposed/releases/latest)
 下载模块，在 LSPosed 内启用，然后重启微信输入法。
 
 ## 配置白名单
