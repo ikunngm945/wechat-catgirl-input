@@ -202,6 +202,9 @@ public final class Llm {
     /** 失败标记上限。 */
     private static final int FAILED_MAX = 128;
 
+    /** 改写失败原因上限（与失败标记同寿命）。 */
+    private static final int ERROR_MAX = 128;
+
     private static final int CONNECT_MS = 5000;
     private static final int READ_MS = 20000;
 
@@ -211,9 +214,6 @@ public final class Llm {
     /** 等待时长的可调范围（毫秒）：太小几乎等不到，太大发送会明显卡顿。 */
     public static final long MIN_WAIT_MS = 200L;
     public static final long MAX_WAIT_MS = 15000L;
-
-    /** 发送前兜底等待的上限：即使面板填得更大，也不让发送卡超过这个数。 */
-    public static final long SEND_CAP_MS = 5000L;
 
     /**
      * 改写结果的长度下限保护（字符）。
@@ -933,10 +933,13 @@ public final class Llm {
     /**
      * 发送前兜底最多等多久。
      *
-     * <p>取面板「等待」时长，但封顶 {@link #SEND_CAP_MS}，免得按发送键卡太久。
+     * <p>v7.14：不再封顶。以前这里取 `min(面板等待, 5 秒)`，用户把面板调到
+     * 8 秒 / 15 秒时发送路径仍只等 5 秒，看起来就是「改了等待没生效」。
+     * 现在老老实实用面板上的值（已被 {@link #clampWait} 夹在
+     * {@link #MIN_WAIT_MS} ~ {@link #MAX_WAIT_MS} 内）。
      */
     public static long sendWaitMs() {
-        return Math.min(waitMs, SEND_CAP_MS);
+        return waitMs;
     }
 
     public static boolean hasKey() {
@@ -1018,6 +1021,10 @@ public final class Llm {
     private static final Set<String> failed =
             new LinkedHashSet<String>();
 
+    /** 失败的原句 → 失败原因（v7.14：直接追加给用户看）。 */
+    private static final Map<String, String> errors =
+            new LinkedHashMap<String, String>();
+
     /** 已经产出过的改写结果正文（识别「回流」用，见 {@link #isOutput}）。 */
     private static final Set<String> outputs =
             new LinkedHashSet<String>();
@@ -1043,6 +1050,16 @@ public final class Llm {
             return false;
         }
         return outputs.contains(text);
+    }
+
+    /** 已经在内存里登记过多少条改写结果（为 0 时调用方可走快路径）。 */
+    public static synchronized int outputCount() {
+        return outputs.size();
+    }
+
+    /** 改写结果快照，供调用方一次性比对（避免在轮询里反复加锁）。 */
+    public static synchronized String[] outputSnapshot() {
+        return outputs.toArray(new String[outputs.size()]);
     }
 
     /** 把一条改写结果登记进「输出集合」，用于识别回流。 */
@@ -1072,6 +1089,7 @@ public final class Llm {
         }
         fetch(text, true);
         long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        long t0 = System.currentTimeMillis();
         while (System.currentTimeMillis() < deadline) {
             String r = rewrite(text);
             if (r != null) {
@@ -1086,7 +1104,17 @@ public final class Llm {
                 return null;
             }
         }
-        return rewrite(text);
+        String r = rewrite(text);
+        if (r != null) {
+            return r;
+        }
+        // v7.14：规定时间内没拿到结果 —— 记成失败原因，直接回给用户看
+        if (!isFailed(text)) {
+            long waited = System.currentTimeMillis() - t0;
+            markFailed(text, "等待超时（" + waited + " 毫秒内没返回结果）");
+            Cat.log("LLM 等待超时 [" + text + "] 等了 " + waited + "ms");
+        }
+        return null;
     }
 
     private static synchronized boolean isFailed(String text) {
@@ -1099,14 +1127,20 @@ public final class Llm {
     }
 
     private static synchronized void fetch(String text, boolean force) {
-        if (!enabled || !usable() || text == null || text.length() == 0) {
+        if (!enabled || text == null || text.length() == 0) {
+            return;
+        }
+        if (!usable()) {
+            lastStatus = "未配置接口地址 / 模型 / Key";
+            Cat.log("LLM 未配置 [" + lastStatus + "]");
+            markFailed(text, lastStatus);
             return;
         }
         if (tooLong(text)) {
             lastStatus = "超长跳过（" + text.length() + "字 > " + maxInput + "字）";
             Cat.log("LLM 超长跳过 [" + text.length() + "字 > 上限 "
-                    + maxInput + "字] 直接用本地规则");
-            markFailed(text);
+                    + maxInput + "字] 不送模型");
+            markFailed(text, lastStatus);
             return;
         }
         if (results.containsKey(text)) {
@@ -1137,6 +1171,7 @@ public final class Llm {
         results.clear();
         inflight.clear();
         failed.clear();
+        errors.clear();
         outputs.clear();
     }
 
@@ -1157,6 +1192,7 @@ public final class Llm {
         if (!cacheEnabled) {
             results.clear();
             failed.clear();
+            errors.clear();
         }
     }
 
@@ -1204,7 +1240,7 @@ public final class Llm {
             synchronized (Llm.class) {
                 inflight.remove(job);
                 if (body == null || body.length() == 0) {
-                    markFailed(job);
+                    markFailed(job, lastStatus);
                     Cat.log("LLM 未命中 [" + job + "] " + lastStatus);
                     return;
                 }
@@ -1220,6 +1256,7 @@ public final class Llm {
                 }
                 results.put(job, body);
                 failed.remove(job);
+                errors.remove(job);
                 if (outputs.size() >= CACHE_MAX * 4) {
                     outputs.clear();
                 }
@@ -1231,7 +1268,7 @@ public final class Llm {
         } catch (Throwable t) {
             synchronized (Llm.class) {
                 inflight.remove(job);
-                markFailed(job);
+                markFailed(job, "处理异常 " + t.getClass().getSimpleName());
             }
             Cat.log("LLM 处理异常 " + t.getClass().getSimpleName());
         }
@@ -1242,6 +1279,29 @@ public final class Llm {
             failed.clear();
         }
         failed.add(job);
+    }
+
+    /**
+     * 记下这句挂掉的原因（v7.14）。
+     *
+     * <p>以前失败只是静默回退本地规则，用户看不出到底是超时、没网还是
+     * 接口报错。现在把原因存下来，由 {@link Cat} 直接追加到原文后面。
+     */
+    private static synchronized void markFailed(String job, String reason) {
+        markFailed(job);
+        if (errors.size() >= ERROR_MAX) {
+            errors.clear();
+        }
+        errors.put(job, reason == null || reason.length() == 0
+                ? "请求失败" : reason);
+    }
+
+    /** 这句挂掉的原因；没挂过（或已经改写成功）返回 null。 */
+    public static synchronized String errorFor(String text) {
+        if (text == null) {
+            return null;
+        }
+        return errors.get(text);
     }
 
     // ------------------------------------------------------------ HTTP

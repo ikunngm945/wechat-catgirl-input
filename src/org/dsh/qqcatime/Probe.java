@@ -277,8 +277,8 @@ public final class Probe implements IXposedHookLoadPackage {
                 return;
             }
             // LLM 改写：打字路径可能还没等到结果，这里再等一小会儿。
-            // 拿到就用模型改写的正文；超时/失败自动回退本地规则，
-            // 绝不因为网络慢把消息卡住。
+            // v7.14 起不再回退本地规则：拿到就改写，没拿到就把失败原因
+            // 追加在原文后面（见 Cat.transformGuarded）。
             //
             // (null hint) 语音上屏会先触发 finishComposingText，
             // 这里再等一次能显著提高命中率。
@@ -289,8 +289,9 @@ public final class Probe implements IXposedHookLoadPackage {
                     String r = Llm.consult(raw, Llm.sendWaitMs());
                     long cost = System.currentTimeMillis() - t0;
                     if (cost >= 50 || r == null) {
+                        String why = r == null ? Llm.errorFor(raw) : null;
                         log("SEND_LLM 等了 " + cost + "ms，结果="
-                                + (r == null ? "回退本地规则" : "已拿到"));
+                                + (r != null ? "已拿到" : "失败(" + why + ")"));
                     }
                 }
             }
@@ -503,7 +504,7 @@ public final class Probe implements IXposedHookLoadPackage {
                         // 这一轮就要定稿写回了 —— 先把 LLM 与向量结果收齐再算
                         // want，顺序不能反，否则等到的结果用不上。
                         // 从预取到现在已经过了稳定判定那几百毫秒，多半早算完；
-                        // 超时就用本地规则，绝不卡输入。
+                        // v7.14 起等不到就按失败处理，把原因追加在原文后面。
                         boolean settling = cur.equals(pending)
                                 && stable + 1 >= SETTLE_POLLS;
                         if (settling && Llm.enabled() && Llm.preEnabled()) {
@@ -512,9 +513,10 @@ public final class Probe implements IXposedHookLoadPackage {
                                 long t0 = System.currentTimeMillis();
                                 String r = Llm.consult(raw, Llm.waitMs());
                                 long cost = System.currentTimeMillis() - t0;
-                                if (cost >= 100) {
+                                if (cost >= 100 || r == null) {
                                     log("LLM_CONSULT 等了 " + cost + "ms，结果="
-                                            + (r == null ? "回退本地规则" : "已拿到"));
+                                            + (r != null ? "已拿到"
+                                               : "失败(" + Llm.errorFor(raw) + ")"));
                                 }
                             }
                         }

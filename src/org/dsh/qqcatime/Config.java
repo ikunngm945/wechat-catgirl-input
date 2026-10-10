@@ -42,7 +42,10 @@ public final class Config {
 
     /** 默认设置。 */
     public static final String DEFAULT_SETTINGS =
-            "# 文字替换总开关（on/off）\n"
+            "# 猫娘模块总开关（on/off）：off = 整个模块不生效，\n"
+          + "# 既不替换文字也不加后缀 / 颜文字，更不请求大模型与向量。\n"
+          + "master=on\n"
+          + "# 文字替换总开关（on/off）\n"
           + "replace=on\n"
           + "# 句末后缀，可改成任意文字；留空则不加\n"
           + "suffix=喵\n"
@@ -74,6 +77,7 @@ public final class Config {
     private static List<Rule> rules = new ArrayList<Rule>();
     private static long rulesStamp = -2;
 
+    private static boolean masterOn = true;
     private static boolean replaceOn = true;
     private static String suffix = "喵";
     private static boolean suffixOn = true;
@@ -171,7 +175,7 @@ public final class Config {
             Cat.writeFile(SETTINGS_FILE, DEFAULT_SETTINGS);
         }
         // 先取默认值，再用文件里的覆盖
-        boolean rOn = true, sOn = true, kOn = true, all = false;
+        boolean mOn = true, rOn = true, sOn = true, kOn = true, all = false;
         String suf = "喵";
         BufferedReader br = null;
         try {
@@ -189,7 +193,10 @@ public final class Config {
                 }
                 String k = line.substring(0, eq).trim().toLowerCase();
                 String v = line.substring(eq + 1).trim();
-                if ("replace".equals(k) || "replace_on".equals(k)) {
+                if ("master".equals(k) || "master_on".equals(k)
+                        || "all_on".equals(k)) {
+                    mOn = isOn(v);
+                } else if ("replace".equals(k) || "replace_on".equals(k)) {
                     rOn = isOn(v);
                 } else if ("suffix".equals(k)) {
                     suf = v;
@@ -208,13 +215,14 @@ public final class Config {
                 try { br.close(); } catch (Throwable t) { }
             }
         }
+        masterOn = mOn;
         replaceOn = rOn;
         suffix = suf;
         suffixOn = sOn;
         kaomojiOn = kOn;
         allApps = all;
-        Cat.log("settings: replace=" + rOn + " suffix=[" + suf + "] suffix_on=" + sOn
-                + " kaomoji=" + kOn + " all_apps=" + all);
+        Cat.log("settings: master=" + mOn + " replace=" + rOn + " suffix=[" + suf
+                + "] suffix_on=" + sOn + " kaomoji=" + kOn + " all_apps=" + all);
     }
 
     private static boolean isOn(String v) {
@@ -260,6 +268,11 @@ public final class Config {
         return replaceOn;
     }
 
+    /** 猫娘模块总开关。 */
+    public static boolean masterEnabled() {
+        return masterOn;
+    }
+
     /** 句末后缀（可能为空字符串）。 */
     public static String suffix() {
         return suffix == null ? "" : suffix;
@@ -282,7 +295,7 @@ public final class Config {
 
     /** 该包名是否应当生效。 */
     public static boolean shouldWorkOn(String pkg) {
-        return allApps || Cat.allowed(pkg);
+        return masterOn && (allApps || Cat.allowed(pkg));
     }
 
     /** 启用的替换规则快照。 */
@@ -320,8 +333,18 @@ public final class Config {
     public static synchronized boolean saveSettings(boolean rOn, String suf,
                                                     boolean sOn, boolean kOn,
                                                     boolean all) {
+        return saveSettings(masterOn, rOn, suf, sOn, kOn, all);
+    }
+
+    /** 保存总开关 + 开关与后缀。 */
+    public static synchronized boolean saveSettings(boolean mOn, boolean rOn,
+                                                    String suf, boolean sOn,
+                                                    boolean kOn, boolean all) {
         try {
             StringBuilder sb = new StringBuilder();
+            sb.append("# 猫娘模块总开关（on/off）：off = 整个模块不生效，\n");
+            sb.append("# 既不替换文字也不加后缀 / 颜文字，更不请求大模型与向量。\n");
+            sb.append("master=").append(mOn ? "on" : "off").append('\n');
             sb.append("# 文字替换总开关（on/off）\n");
             sb.append("replace=").append(rOn ? "on" : "off").append('\n');
             sb.append("# 句末后缀，可改成任意文字；留空则不加\n");
@@ -358,7 +381,7 @@ public final class Config {
 
     /** 对文本应用启用的替换规则。 */
     public static String applyReplace(String input) {
-        if (!replaceOn || input == null || input.length() == 0) {
+        if (!masterOn || !replaceOn || input == null || input.length() == 0) {
             return input;
         }
         String out = input;

@@ -9,10 +9,10 @@ package org.dsh.qqcatime;
 public final class Version {
 
     /** 版本名，与 build.py 的 VERSION 对应。 */
-    public static final String NAME = "7.13";
+    public static final String NAME = "7.15";
 
     /** 版本号（整数），与 AndroidManifest 的 versionCode 对应。 */
-    public static final int CODE = 713;
+    public static final int CODE = 715;
 
     private Version() {
     }

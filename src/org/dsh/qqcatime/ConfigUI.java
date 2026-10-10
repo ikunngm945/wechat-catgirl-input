@@ -105,11 +105,29 @@ public final class ConfigUI {
         setBox.setOrientation(LinearLayout.VERTICAL);
         root.addView(setBox);
 
+        final Runnable[] setHolder = new Runnable[1];
         final Runnable refreshSettings = new Runnable() {
             @Override
             public void run() {
                 setBox.removeAllViews();
                 Config.load();
+
+                // 总开关：一键开关整个模块（v7.14）
+                setBox.addView(buildSwitchRow(a, "总开关（关掉整个模块都不生效）",
+                        Config.masterEnabled(), new SwitchHandler() {
+                            @Override
+                            public void onSet(boolean v) {
+                                Config.saveSettings(v,
+                                        Config.replaceEnabled(),
+                                        Config.suffix(),
+                                        Config.suffixEnabled(),
+                                        Config.kaomojiEnabled(),
+                                        Config.allAppsEnabled());
+                                if (setHolder[0] != null) {
+                                    setHolder[0].run();
+                                }
+                            }
+                        }));
 
                 // 三个总开关 + 所有应用
                 setBox.addView(buildSwitchRow(a, "文字替换（我→本喵 等）",
@@ -221,7 +239,8 @@ public final class ConfigUI {
                 TextView rHint = new TextView(a);
                 rHint.setTextSize(10);
                 rHint.setTextColor(Color.parseColor("#888888"));
-                rHint.setText("当前设置：替换 " + (Config.replaceEnabled() ? "开" : "关")
+                rHint.setText("当前设置：总开关 " + (Config.masterEnabled() ? "开" : "关")
+                        + " / 替换 " + (Config.replaceEnabled() ? "开" : "关")
                         + " / 后缀 " + (Config.suffixEnabled()
                                 ? "[" + Config.suffix() + "]" : "关")
                         + " / 颜文字 " + (Config.kaomojiEnabled() ? "开" : "关")
@@ -229,6 +248,7 @@ public final class ConfigUI {
                 setBox.addView(rHint);
             }
         };
+        setHolder[0] = refreshSettings;
         refreshSettings.run();
 
         // ---- 使用说明 ----
@@ -1011,8 +1031,8 @@ public final class ConfigUI {
                                         Llm.maxInput(), Llm.level(), wt);
                             }
                         }));
-                inner.addView(note(a, d, "打字时最多等模型多久；超时先用本地规则。"
-                        + "发送前兜底最多等 " + (Llm.SEND_CAP_MS / 1000) + " 秒。"));
+                inner.addView(note(a, d, "打字时最多等模型多久；超时后用原文加错误原因。"
+                        + "发送前兜底同样按这个时长等待。"));
 
                 // 提示词编辑
                 TextView pLab = new TextView(a);
@@ -1514,7 +1534,8 @@ public final class ConfigUI {
                   + "  · 事前分析开着时，事后分析照常进行（事前包含事后）。\n"
                   + "  · 事前分析关掉 = 只做事后分析，打字过程中不联网，\n"
                   + "    已经记下的句子仍然能靠「完全相同」命中。\n"
-                  + "  · 关掉总开关则完全不请求网络，只用关键词规则。\n"
+                  + "  · 关掉最上面的「总开关」= 整个模块停用：不替换文字、\n"
+                  + "    不加后缀与颜文字，也不请求大模型与向量。\n"
                   + "\n颜文字向量索引：\n"
                   + "  · 索引是把每条颜文字的「语义描述」向量化后存进 kaovec.txt。\n"
                   + "  · 改过词库或换过模型后，这里会提示「需重建」，\n"

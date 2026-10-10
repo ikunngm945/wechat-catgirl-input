@@ -21,7 +21,7 @@ SDK = Path('/root/dsh/apk-analysis/tools/android-33/android.jar')
 R8 = Path('/www/wwwroot/192.168.1.116_10086/android-music/tools/r8.jar')
 API = ROOT / 'deps/xposed-api-82.jar'
 ENTRY = 'org.dsh.qqcatime.Probe'
-VERSION = "7.13"
+VERSION = "7.15"
 
 
 def run(*args):

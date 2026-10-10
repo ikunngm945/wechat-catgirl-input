@@ -48,7 +48,208 @@ public final class Cat {
     /** true：喵 加在标点前（你好喵。）。 */
     private static final boolean MIAO_BEFORE_PUNCT = true;
 
-    /** 内置词库（54 条）。 */
+    /**
+     * 改写标记：零宽字符（U+200B）。
+     *
+     * <p>v7.14 起，模型改写过的正文会用它包起来（`ZW 正文 ZW`）。
+     * 下次再读到带标记的文字就直接原样返回，不再改写 —— 免得写回输入框
+     * 的内容被反复送去模型。它是零宽的，聊天窗口里看不见。
+     */
+    public static final String ZW = "\u200B";
+
+    /** LLM 失败时追加在原文后面的前缀（故意不用零宽，见需求）。 */
+    public static final String ERR_PREFIX = "\n⚠ LLM 改写失败：";
+
+    /** 失败提示的收尾换行：保证用户接着打的字仍落在提示行之后。 */
+    private static final String ERR_END = "\n";
+
+    /** 这段文字是否已经被零宽字符标记过。 */
+    public static boolean isMarked(String s) {
+        return s != null && s.indexOf(ZW) >= 0;
+    }
+
+    /** 去掉零宽标记（送去模型 / 匹配标签前必须先去掉）。 */
+    public static String unmark(String s) {
+        if (s == null || s.length() == 0) {
+            return "";
+        }
+        return s.replace(ZW, "");
+    }
+
+    /** 给改写结果套上零宽标记。 */
+    public static String mark(String s) {
+        if (s == null || s.length() == 0) {
+            return s;
+        }
+        return ZW + s + ZW;
+    }
+
+    /**
+     * 零宽标记是否成对（数量为偶数且每个开头标记都有配对的收尾标记）。
+     *
+     * <p>mark() 总是插入一对，所以文件里零宽的数量必定是偶数。
+     * 用户退格删掉一个就会变成奇数 —— 这就是「用户动过这段文字」的信号。
+     */
+    private static boolean isPaired(String s) {
+        if (s == null) {
+            return true;
+        }
+        int n = 0;
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) == ZW.charAt(0)) {
+                n++;
+            }
+        }
+        return n % 2 == 0;
+    }
+
+    /** 这段文字是不是「上一轮追加的失败提示」。 */
+    public static boolean isErrorText(String s) {
+        return s != null && s.indexOf(ERR_PREFIX) >= 0;
+    }
+
+    /**
+     * 认定「这段是我们自己产出过的改写正文」所需的最短长度。
+     *
+     * <p>太短的串（「喵」「哦」）到处都是，按内容比对会误伤用户原文，
+     * 所以宁可放过短的，也不要错认。
+     */
+    private static final int MIN_PROTECT = 6;
+
+    /**
+     * 从 {@code at} 起匹配一段已登记的改写正文（含后面本地补的颜文字）。
+     *
+     * <p>零宽标记本该成对，但真机实测发现宿主写回输入框时会吃掉行尾那个
+     * （日志证据：{@code WRITE from=[\u200B正文] to=[正文]}），于是下次读到的
+     * 文本「看着像自由文字，其实已经改写过」。更麻烦的是用户接着打字时，
+     * 旧段落会落在自由文字<b>中间</b>（实测 {@code from=[hello呀hello hello呀～
+     * 本喵来啦喵～…]}），只看开头认不出来，那段旧文字就被整句重新送模型：
+     * 实测多花 4.2 秒，还把已经改好的话又改了一遍。
+     *
+     * @return 命中片段的长度；没命中返回 0
+     */
+    private static int matchOutputLen(String[] outs, String s, int at) {
+        if (outs == null || outs.length == 0 || at < 0 || at >= s.length()) {
+            return 0;
+        }
+        int best = 0;
+        for (String o : outs) {
+            if (o == null || o.length() < MIN_PROTECT) {
+                continue;
+            }
+            if (s.startsWith(o, at) && o.length() > best) {
+                best = o.length();
+            }
+        }
+        if (best == 0) {
+            return 0;
+        }
+        int n = at + best;
+        // 改写结果后面常常跟着本地补的颜文字，那串也属于这段已完成的文字。
+        // 不一起带走的话，它会掉到后面被当自由文字重新处理：旧颜文字被丢掉、
+        // 还会多问一次向量模型。
+        TagLib.load();
+        boolean moved = true;
+        while (moved) {
+            moved = false;
+            for (String k : kaomoji) {
+                if (k.length() > 0 && s.startsWith(k, n)) {
+                    n += k.length();
+                    moved = true;
+                    break;
+                }
+            }
+        }
+        return n - at;
+    }
+
+    /** 自由文字里最早出现的一段「自己产出过的改写正文」；没有返回 -1。 */
+    private static int firstOutputAt(String[] outs, String s) {
+        return firstOutputAt(outs, s, 0);
+    }
+
+    /**
+     * 从 {@code from} 起，最早出现的一段「自己产出过的改写正文」；没有返回 -1。
+     *
+     * <p>用 {@link String#indexOf(String,int)} 逐个输出找最早位置，而不是对每个
+     * 下标都试一遍：轮询每几百毫秒跑一次，已登记的输出可能上千条、整段文字可能
+     * 几百字，逐下标暴力比对会明显卡顿。
+     */
+    private static int firstOutputAt(String[] outs, String s, int from) {
+        if (outs == null || outs.length == 0 || s == null) {
+            return -1;
+        }
+        int best = -1;
+        for (String o : outs) {
+            if (o == null || o.length() < MIN_PROTECT) {
+                continue;
+            }
+            int p = s.indexOf(o, from);
+            if (p >= 0 && (best < 0 || p < best)) {
+                best = p;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * 处理一段自由文字：里面若混着「自己产出过的改写正文」，那部分原样保留，
+     * 只有真正的新文字才送去改写。
+     *
+     * @param sb   输出累积（受保护的旧段落会补回零宽标记）
+     * @param free 自由文字累积（用于判断「这句拿到改写结果了没」）
+     */
+    private static void appendFree(StringBuilder sb, StringBuilder free,
+                                   String[] outs, String seg, boolean loose) {
+        if (seg == null || seg.length() == 0) {
+            return;
+        }
+        int at = firstOutputAt(outs, seg);
+        if (at < 0) {
+            free.append(seg);
+            sb.append(loose ? transformLoosePart(seg) : transformPart(seg));
+            return;
+        }
+        if (at > 0) {
+            appendFree(sb, free, outs, seg.substring(0, at), loose);
+        }
+        int n = matchOutputLen(outs, seg, at);
+        sb.append(mark(seg.substring(at, at + n)));
+        if (at + n < seg.length()) {
+            appendFree(sb, free, outs, seg.substring(at + n), loose);
+        }
+    }
+
+    /** 去掉自由文字里混着的「自己产出过的改写正文」，只留下真正的新文字。 */
+    private static String stripOutputs(String[] outs, String s) {
+        if (s == null || s.length() == 0) {
+            return s;
+        }
+        int at = firstOutputAt(outs, s);
+        if (at < 0) {
+            return s;
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < s.length()) {
+            int z = firstOutputAt(outs, s, i);
+            if (z < 0) {
+                sb.append(s.substring(i));
+                break;
+            }
+            if (z > i) {
+                sb.append(s.substring(i, z));
+            }
+            int n = matchOutputLen(outs, s, z);
+            if (n <= 0) {
+                sb.append(s.substring(z));
+                break;
+            }
+            i = z + n;
+        }
+        return sb.toString();
+    }
+
     /**
      * 内置默认词库（来自 config/katxt，由 tools/gen_config.py 生成）。
      * 首次运行释放；也可通过「恢复默认设置」还原。
@@ -712,9 +913,126 @@ public final class Cat {
 
     /**
      * 核心转换。
-     * 无句末标点时原样返回；已处理妥当且颜文字在末尾时也原样返回（保证幂等）。
+     *
+     * <p>v7.14 起：
+     * <ul>
+     *   <li>模型改写过的段落用零宽字符包起来，下次读到就原样保留；</li>
+     *   <li>改写失败（接口报错 / 超时 / 没网）时，把失败原因追加在原文后面，
+     *       不再静默回退本地规则；</li>
+     *   <li>失败提示本身不加零宽标记，所以它不会让这段话被当成「已改写」。</li>
+     * </ul>
      */
     public static String transform(String input) {
+        return transformGuarded(input, false);
+    }
+
+    /**
+     * 逐段转换：零宽标记包住的段落原样保留，只处理其余的自由文字。
+     *
+     * <p>用户接着往后打字时，输入框里会同时存在「已改写的旧段」与
+     * 「还没处理的新段」，所以不能看到标记就整段跳过 —— 要把受保护的
+     * 段落切出来，只对自由段落动手。
+     */
+    private static String transformGuarded(String input, boolean loose) {
+        if (input == null || input.length() == 0) {
+            return input;
+        }
+        // 总开关关掉：整个模块都不生效（不替换、不加后缀、不加颜文字）
+        if (!Config.masterEnabled()) {
+            return input;
+        }
+        // 先把上一轮自己追加的失败提示摘掉，这一轮按最新状态重新决定
+        String clean = stripErrors(input);
+        // 标记必须成对。用户按一次退格就可能删掉结尾那个零宽，
+        // 只剩开头一个 —— 这种「落单」状态绝不能整段当成「已改写段落」，
+        // 否则从那个零宽往后的所有内容（含用户接着打的字）会被永久冻结。
+        // 但也不能一律当自由文字：宿主写回输入框时也会吃掉行尾零宽
+        // （真机实测），那种情况整段会被重新送模型。所以整段清掉标记后
+        // 再按内容认一遍（见 appendFree / matchOutputLen）。
+        boolean paired = isPaired(clean);
+        if (!paired) {
+            clean = unmark(clean);
+        }
+        String[] outs = Llm.enabled() ? Llm.outputSnapshot() : null;
+        // 整段就是一段已经改好的旧文字、后面没有新内容：原样返回
+        // （顺手把落单零宽与失败提示清掉），别补回标记 —— 宿主若每次都吃
+        // 行尾零宽，补一次它吃一次，会变成「写回→被吃→再写回」的死循环。
+        if (matchOutputLen(outs, clean, 0) >= clean.length() && clean.length() > 0) {
+            return clean;
+        }
+        StringBuilder sb = new StringBuilder();
+        // 只有自由文字才需要判断「这句拿到改写结果了没」。
+        // 受保护段（含被认回来的旧段落）绝不能混进去 —— 否则那段文字
+        // 永远查不到结果，会被误判成失败、每轮都追加一次失败提示。
+        StringBuilder free = new StringBuilder();
+        int i = 0;
+        while (i < clean.length()) {
+            int z = paired ? clean.indexOf(ZW, i) : -1;
+            if (z < 0) {
+                appendFree(sb, free, outs, clean.substring(i), loose);
+                break;
+            }
+            if (z > i) {
+                appendFree(sb, free, outs, clean.substring(i, z), loose);
+            }
+            int z2 = clean.indexOf(ZW, z + 1);
+            if (z2 < 0) {
+                sb.append(clean.substring(z));   // paired 已保证成对，兜底而已
+                break;
+            }
+            // 已改写的段落原样保留（它本来就是按标记受保护的）
+            sb.append(clean.substring(z, z2 + 1));
+            i = z2 + 1;
+        }
+        String out = sb.toString();
+        // 这句还没拿到改写结果：把失败原因追加在原文后面
+        String base = llmInput(free.toString());
+        if (Llm.enabled() && base.length() > 0 && Llm.rewrite(base) == null) {
+            out = appendError(out, Llm.errorFor(base));
+        }
+        return out;
+    }
+
+    /** 把失败原因追加在文字后面；没有原因就原样返回。 */
+    private static String appendError(String text, String why) {
+        if (why == null || why.length() == 0) {
+            return text;
+        }
+        return text + ERR_PREFIX + why + ERR_END;
+    }
+
+    /**
+     * 去掉上一轮追加的失败提示（它会独占一行）。
+     */
+    private static String stripErrors(String s) {
+        if (s == null || s.indexOf(ERR_PREFIX) < 0) {
+            return s;
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (true) {
+            int z = s.indexOf(ERR_PREFIX, i);
+            if (z < 0) {
+                sb.append(s.substring(i));
+                break;
+            }
+            sb.append(s.substring(i, z));
+            int nl = s.indexOf('\n', z + ERR_PREFIX.length());
+            if (nl < 0) {
+                break;   // 提示一直写到结尾
+            }
+            i = nl + 1;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 转换一段「自由文字」（不含零宽标记与失败提示）。
+     *
+     * <p>LLM 开着时不再回退本地规则：拿到结果就套上零宽标记返回，
+     * 没拿到就原样返回（失败原因由调用方追加）。
+     */
+    private static String transformPart(String input) {
         if (input == null || input.length() == 0) {
             return input;
         }
@@ -723,33 +1041,72 @@ public final class Cat {
         if (base.length() == 0) {
             return input;   // 已经是模型输出，链条到此为止
         }
-        String core = coreText(input);
+        if (Llm.enabled()) {
+            String rewritten = Llm.rewrite(base);
+            if (rewritten == null || rewritten.length() == 0) {
+                return input;   // 还没落定 / 失败：这一轮先不动
+            }
+            // LLM 已改写：正文就是模型输出，句末后缀已由模型加过，
+            // 所以不再看 needsMiao（那里的「喵」判定对模型输出不适用）。
+            // 稳定判据：去掉末尾颜文字后的正文已经等于模型输出 -> 不用再动，
+            // 否则每一轮都会重新随机挑一次颜文字。
+            if (endsWithKaomoji(input) && stripped.equals(rewritten)) {
+                return input;
+            }
+            // 把「改写后的正文」登记成它自己的结果：写回后轮询会再读一遍，
+            // 不登记就会每轮重新请求模型。
+            Llm.noteIdentity(rewritten);
+            return mark(withKaomojiPerSentence(rewritten, true));
+        }
+        String core = Config.applyReplace(base);
         if (core.length() == 0) {
             return input;
         }
-        boolean llmApplied = Llm.enabled() && Llm.rewrite(base) != null;
-        if (!llmApplied) {
-            // 没有任何「未喵化的标点」=> 保持原样，不打扰正常打字
-            if (!needsMiao(stripped)) {
-                return input;
-            }
-            return withKaomojiPerSentence(core, false);
-        }
-        // LLM 已改写：正文就是模型输出，句末后缀已由模型加过，
-        // 所以不再看 needsMiao（那里的「喵」判定对模型输出不适用）。
-        // 稳定判据：去掉末尾颜文字后的正文已经等于模型输出 -> 不用再动，
-        // 否则每一轮都会重新随机挑一次颜文字。
-        if (endsWithKaomoji(input) && stripped.equals(core)) {
+        // 没有任何「未喵化的标点」=> 保持原样，不打扰正常打字
+        if (!needsMiao(stripped)) {
             return input;
         }
-        // 把「改写后的正文」登记成它自己的结果：写回后轮询会再读一遍，
-        // 不登记就会每轮重新请求模型。
-        Llm.noteIdentity(core);
-        return withKaomojiPerSentence(core, true);
+        return withKaomojiPerSentence(core, false);
     }
 
     /**
-     * LLM 的输入文本：去掉颜文字，必要时去掉句末原有的「喵」。
+     * 只留下需要处理的自由文字：去掉已改写的段落与失败提示。
+     *
+     * <p>轮询与发送前都会先拿 {@link #llmInput} 判断「这句要不要送模型」，
+     * 这一步必须先把标记剥掉，否则会把零宽字符一起发给模型。
+     */
+    public static String freeText(String input) {
+        if (input == null || input.length() == 0) {
+            return "";
+        }
+        String[] outs = Llm.enabled() ? Llm.outputSnapshot() : null;
+        // 零宽落单时（宿主吃掉行尾那个，或用户自己退格删的）先全部剥掉，
+        // 剩下的整段都按内容判断，判定与 transformGuarded 保持一致。
+        String s = isPaired(input) ? input : unmark(input);
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < s.length()) {
+            int z = s.indexOf(ZW, i);
+            if (z < 0) {
+                sb.append(s.substring(i));
+                break;
+            }
+            if (z > i) {
+                sb.append(s.substring(i, z));
+            }
+            int z2 = s.indexOf(ZW, z + 1);
+            if (z2 < 0) {
+                break;
+            }
+            i = z2 + 1;
+        }
+        // 去掉混在自由文字里的「自己产出过的改写正文」——宿主吃掉行尾零宽后
+        // 那段旧文字会落在这里，不认出来就会整段重新送模型（实测多花 4.2 秒）。
+        return stripErrors(stripOutputs(outs, sb.toString()));
+    }
+
+    /**
+     * LLM 的输入文本：去掉颜文字与零宽标记，必要时去掉句末原有的「喵」。
      *
      * <p>两种模式差别很大：
      * <ul>
@@ -765,7 +1122,10 @@ public final class Cat {
         if (input == null) {
             return "";
         }
-        String s = stripKaomoji(input);
+        String s = stripKaomoji(freeText(input));
+        if (s.length() == 0) {
+            return "";
+        }
         if (Llm.enabled()) {
             return Llm.isOutput(s) ? "" : s;
         }
@@ -775,14 +1135,8 @@ public final class Cat {
     /**
      * 取「用于挑颜文字的正文」。
      *
-     * <p>三条路径：
-     * <ol>
-     *   <li>LLM 改写开着，并且这句已经有模型结果 → 直接用模型输出的正文
-     *       （人称替换与句末后缀都由模型做了，本地不再套用）；</li>
-     *   <li>LLM 改写开着但结果还没回来 / 请求失败 → 回落本地规则
-     *       （仍然做人称替换与句末后缀），保证消息不会白发；</li>
-     *   <li>LLM 改写关着 → 本地规则，行为与以前完全一致。</li>
-     * </ol>
+     * <p>v7.14 起 LLM 开着时不再静默回退本地规则：拿到结果就用模型输出，
+     * 没拿到就返回空串（调用方会原样返回原文并追加失败原因）。
      */
     public static String coreText(String input) {
         String base = llmInput(input);
@@ -794,8 +1148,7 @@ public final class Cat {
             if (r != null && r.length() > 0) {
                 return r;
             }
-            // 回退本地规则：人称替换 + 去句末原有的喵
-            return Config.applyReplace(stripSentenceMiao(base));
+            return "";
         }
         return Config.applyReplace(base);
     }
@@ -820,13 +1173,18 @@ public final class Cat {
     /**
      * 宽宽松转换：供「语音输入自动发送」使用。
      *
-     * 语音识别结果常常不带句末标点（尤其短句，如「你好 你好」），
+     * <p>语音识别结果常常不带句末标点（尤其短句，如「你好 你好」），
      * 若沿用 transform() 的「无标点不动」规则，语音消息就永远不会被喵化。
      * 这里改为：人称替换 + 追加颜文字必定执行；句末标点则照常加「喵」。
      *
      * @return 转换后的文本；确实无可改动时原样返回（保证幂等）
      */
     public static String transformLoose(String input) {
+        return transformGuarded(input, true);
+    }
+
+    /** {@link #transformLoose} 的单段实现。 */
+    private static String transformLoosePart(String input) {
         if (input == null || input.length() == 0) {
             return input;
         }
@@ -835,22 +1193,23 @@ public final class Cat {
         if (base.length() == 0) {
             return input;   // 已经是模型输出，链条到此为止
         }
-        String core = coreText(input);
+        if (Llm.enabled()) {
+            String rewritten = Llm.rewrite(base);
+            if (rewritten == null || rewritten.length() == 0) {
+                return input;
+            }
+            // 稳定判据：正文已经落定，且末尾已有颜文字 -> 保持原样，别反复改写
+            if (endsWithKaomoji(input) && stripped.equals(rewritten)) {
+                return input;
+            }
+            Llm.noteIdentity(rewritten);
+            return mark(withKaomojiPerSentence(rewritten, true));
+        }
+        String core = Config.applyReplace(base);
         if (core.length() == 0) {
             return input;
         }
-        boolean llmApplied = Llm.enabled() && Llm.rewrite(base) != null;
-
-        // 稳定判据：正文已经落定，且末尾已有颜文字 -> 保持原样，别反复改写
-        if (endsWithKaomoji(input) && (llmApplied ? stripped.equals(core)
-                                                  : core.equals(stripped))) {
-            return input;
-        }
-        // 加喵与选颜文字都放到「逐句」里做，保证没标点的句子也能补上喵
-        if (llmApplied) {
-            Llm.noteIdentity(core);
-        }
-        return withKaomojiPerSentence(core, llmApplied);
+        return withKaomojiPerSentence(core, false);
     }
 
     /**
